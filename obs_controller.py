@@ -397,8 +397,26 @@ class ObsRenderer:
 
             time.sleep(self.poll_interval)
 
+    def _clear_media_input_file(self) -> None:
+        """Clear the file path on the media input to prevent OBS trying to load missing files."""
+        try:
+            print("[→] Clearing media input to prevent OBS loading stale files...")
+            # This should prevent the "missing files" dialog from appearing
+            self.client.set_input_settings(
+                self.conn.input_name,
+                {"local_file": ""},
+                overlay=True,
+            )
+            time.sleep(1)  # Let OBS process the empty file setting
+            print("[✓] Media input cleared")
+        except Exception as e:
+            print(f"[!] Could not clear media input: {e}")
+
     def validate_obs_setup(self) -> None:
         """Ensure the configured scene and input exist. Filters are created automatically."""
+        # Clear stale media file references to prevent "missing files" dialog
+        self._clear_media_input_file()
+
         scenes_response = self.client.get_scene_list()
         scene_names = [scene.get("sceneName") for scene in getattr(scenes_response, "scenes", [])]
         if self.conn.scene_name not in scene_names:

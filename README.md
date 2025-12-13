@@ -72,6 +72,17 @@ Beispiel: `video.mp4 → video_soft_20231212-150501.mkv`
 
 ## 6. Troubleshooting
 
+### "Missing Files" Dialog beim Start
+Wenn OBS beim Starten eine "Missing Files"-Dialog anzeigt (weil gelöschte Dateien gesucht werden):
+
+```bash
+./cleanup_obs_config.sh
+```
+
+Dieses Skript entfernt alle fehlenden Dateipfade aus der OBS-Konfiguration. Danach OBS neu starten.
+
+### Weitere Probleme
+
 - Wenn OBS noch aufnimmt, bricht das Skript ab, damit nichts überschrieben wird.
 - Bei `OBS_MEDIA_STATE_ERROR` beendet das Skript ebenfalls mit Fehlermeldung.
 - Stelle sicher, dass die Szene + Media-Source exakt so heißen wie im Skript
