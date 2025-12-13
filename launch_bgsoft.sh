@@ -7,6 +7,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Use explicit Python from BG-Soft conda environment
+# Hardcode home directory for this user (required for desktop launcher)
+HOME="/home/matthias"
 export PYTHON="$HOME/miniconda3/envs/BG-Soft/bin/python"
 
 # Verify conda environment exists and Python is available
@@ -82,11 +84,5 @@ sleep $WAIT_TIME
 
 # Launch the GUI (without exec to allow trap to trigger)
 echo "[→] Launching BG-Soft GUI..."
-
-# Log to file when launched from desktop (no terminal)
-if [[ ! -t 1 ]]; then
-    mkdir -p "$HOME/.local/share/bgsoft"
-    exec >> "$HOME/.local/share/bgsoft/launch.log" 2>&1
-fi
 
 "$PYTHON" "$SCRIPT_DIR/bg_soft_gui.py"

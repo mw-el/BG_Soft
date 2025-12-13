@@ -3,8 +3,13 @@
 
 set -euo pipefail
 
+# Set HOME if not already set (for desktop launcher environments)
+if [ -z "${HOME:-}" ]; then
+    HOME="/home/matthias"
+fi
+
 # Ensure ~/bin is in PATH for native obs binary
-export PATH=~/bin:$PATH
+export PATH="$HOME/bin:$PATH"
 
 echo "Starting OBS Studio with Automation profile..."
 echo
