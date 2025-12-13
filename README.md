@@ -6,16 +6,32 @@ automatisch, sobald der Clip durchgelaufen ist.
 
 ## 1. OBS vorbereiten (einmalig)
 
-1. **WebSocket aktivieren**
+### Schritt 1: Automation-Profil erstellen (EMPFOHLEN - verhindert Missing Files Dialog)
+
+```bash
+./setup_obs_automation.sh
+```
+
+Dieses Skript erstellt ein dediziertes "Automation"-Profil und eine "Automation"-Szene ohne alte Dateireferenzen.
+
+**Danach OBS mit diesem Befehl starten:**
+```bash
+obs --profile "Automation" --collection "Automation"
+```
+
+### Schritt 2: OBS konfigurieren
+
+1. **WebSocket Server aktivieren**
    - OBS → `Tools → WebSocket Server Settings`
    - Server aktivieren, Port (Standard `4455`) merken und ein Passwort setzen
-2. **Szene aufsetzen**
-   - Lege z. B. eine Szene `BR-Render` an
-   - Füge eine Media-Source `BR-Clip` hinzu
-   - Weise irgendeine Testdatei zu und aktiviere `Restart playback when source becomes active`
-   - Richte auf der Quelle deinen Background-Removal-Filter ein
 
-Während der Automatisierung muss OBS laufen und darf selbst nichts anderes
+2. **Szene konfigurieren**
+   - Öffne die Szene `BR-Render`
+   - Wähle die Media-Source `Media Source 2` aus
+   - In den Properties: Richte deinen Background-Removal-Filter ein
+   - Speichere die Konfiguration
+
+**Wichtig:** Während der Automatisierung muss OBS laufen und darf selbst nichts anderes
 aufnehmen oder streamen.
 
 ## 2. Python-Abhängigkeiten
@@ -37,7 +53,7 @@ Optionale Flags:
 
 - `--host/--port/--password` – Verbindung zur OBS-WebSocket-Instanz
 - `--scene` – Szenenname (Default `BR-Render`)
-- `--input` – Name der Media-Source in dieser Szene (Default `BR-Clip`)
+- `--input` – Name der Media-Source in dieser Szene (Default `Media Source 2`)
 - `--poll` – Intervall in Sekunden für Statusabfragen (Default `0.5`)
 
 ## 4. PyQt5-GUI
@@ -60,7 +76,7 @@ enthalten.
 
 ## 5. Ergebnisdatei
 
-OBS speichert die Aufnahme wie gewohnt (z. B. in deinem Standardaufnahmeordner).
+OBS speichert die Aufnahme wie gewohnt (z. B. in deinem Standardaufnahmeordner).
 Das Skript wartet auf den fertig gerenderten Clip, verschiebt ihn anschließend
 zum Eingabeverzeichnis und benennt ihn nach dem Schema:
 
@@ -72,8 +88,9 @@ Beispiel: `video.mp4 → video_soft_20231212-150501.mkv`
 
 ## 6. Troubleshooting
 
-### "Missing Files" Dialog beim Start
-Wenn OBS beim Starten eine "Missing Files"-Dialog anzeigt (weil gelöschte Dateien gesucht werden):
+### "Missing Files" Dialog beim Start (GELÖST durch setup_obs_automation.sh)
+
+Wenn trotzdem eine "Missing Files"-Dialog anzeigt wird:
 
 ```bash
 ./cleanup_obs_config.sh
