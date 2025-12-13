@@ -25,6 +25,22 @@ AUTOMATION_COLLECTION="Automation"
 
 echo "[→] Setting up OBS Automation configuration..."
 
+# Enable WebSocket server for automation
+WEBSOCKET_CONFIG="$HOME/.config/obs-studio/plugin_config/obs-websocket"
+mkdir -p "$WEBSOCKET_CONFIG"
+echo "[→] Configuring WebSocket server..."
+cat > "$WEBSOCKET_CONFIG/config.json" << 'WEBSOCKET_EOF'
+{
+  "alerts_enabled": false,
+  "auth_required": true,
+  "first_load": false,
+  "server_enabled": true,
+  "server_password": "obsstudio",
+  "server_port": 4455
+}
+WEBSOCKET_EOF
+echo "[✓] WebSocket server configured"
+
 # Create Automation profile if it doesn't exist
 if [[ ! -d "$OBS_PROFILES_DIR/$AUTOMATION_PROFILE" ]]; then
   echo "[→] Creating profile: $AUTOMATION_PROFILE"
@@ -139,11 +155,10 @@ cat << 'INSTRUCTIONS'
    - In the Properties panel, set up your Background-Removal filter
    - Save the scene
 
-4. Enable WebSocket Server:
-   - Tools → WebSocket Server Settings
-   - Enable the server
-   - Set port (default 4455)
-   - Set password (default: obsstudio)
+4. WebSocket Server:
+   - WebSocket Server is now pre-configured and enabled
+   - Default port: 4455
+   - Default password: obsstudio
 
 5. Now you can use BG-Soft:
    python bg_soft_gui.py

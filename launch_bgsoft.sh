@@ -9,7 +9,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Cleanup function to stop OBS when BG-Soft exits
 cleanup() {
     echo "[→] Cleaning up OBS..."
-    pkill -f "obsproject.Studio" || true
+    pkill -f "bwrap.*obs" || true
+    pkill obs || true
     sleep 1
 }
 
@@ -23,8 +24,8 @@ if [[ ! -d "$HOME/.config/obs-studio/basic/profiles/Automation" ]]; then
     "$SCRIPT_DIR/setup_obs_automation.sh"
 fi
 
-# Check if OBS (flatpak) is running
-if ! pgrep -f "obsproject.Studio" > /dev/null 2>&1; then
+# Check if OBS (flatpak or native) is running, exclude zombies
+if ! (pgrep -f "bwrap.*obs" > /dev/null 2>&1 || (pgrep obs > /dev/null 2>&1 && ps aux | grep -v grep | grep obs | grep -v "Z" > /dev/null)); then
     echo "[→] Starting OBS..."
     "$SCRIPT_DIR/start_obs.sh" &
     sleep 15  # Give OBS time to start (wait longer than start_obs.sh's 10s + overhead)

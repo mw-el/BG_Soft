@@ -23,8 +23,8 @@ if [[ ! -d "$HOME/.config/obs-studio/basic/profiles/Automation" ]]; then
     exit 1
 fi
 
-# Check if OBS is already running (check for Flatpak OBS specifically)
-if pgrep -f "obsproject.Studio" > /dev/null 2>&1; then
+# Check if OBS is already running (check for both Flatpak and native OBS, exclude zombies)
+if ps aux | grep -v grep | awk '/obs|bwrap/{if($8 !~ /Z/) print}' | grep -q . ; then
     echo "[✓] OBS is already running"
     sleep 1
 else
@@ -50,7 +50,7 @@ else
     echo "[→] Waiting for OBS to start..."
     sleep 10
 
-    if pgrep -f "obsproject.Studio" > /dev/null 2>&1; then
+    if pgrep -f "bwrap.*obs" > /dev/null 2>&1 || (pgrep obs > /dev/null 2>&1 && ps aux | grep -v grep | grep obs | grep -v "Z" > /dev/null); then
         echo "[✓] OBS started successfully"
 
         # Minimize OBS window to run invisibly in the background
@@ -81,7 +81,8 @@ echo
 echo "Configuration status:"
 echo
 echo "1. WebSocket Server"
-if grep -q "websocket_server_enabled" "$HOME/.config/obs-studio/global.ini" 2>/dev/null; then
+WEBSOCKET_CONFIG="$HOME/.config/obs-studio/plugin_config/obs-websocket/config.json"
+if [[ -f "$WEBSOCKET_CONFIG" ]] && grep -q '"server_enabled":\s*true' "$WEBSOCKET_CONFIG" 2>/dev/null; then
     echo "   [✓] WebSocket Server is enabled"
 else
     echo "   [!] WebSocket Server needs to be enabled"
