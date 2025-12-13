@@ -71,66 +71,141 @@ if [[ ! -f "$OBS_SCENES_DIR/$AUTOMATION_COLLECTION.json" ]]; then
 
   cat > "$OBS_SCENES_DIR/$AUTOMATION_COLLECTION.json" << 'EOF'
 {
-  "AuxAudioDevice1": null,
-  "AuxAudioDevice2": null,
-  "AuxAudioDevice3": null,
-  "DesktopAudioDevice": "default",
-  "DesktopAudioDevice2": null,
-  "DesktopAudioDevice3": null,
-  "PPTAEOSDeinterlaceFilter": "Yadif2x",
-  "VirtualCamAudioDevice": null,
-  "groups": [],
-  "name": "Automation",
-  "scene-order": [
-    {
-      "name": "BR-Render"
-    }
-  ],
-  "scenes": [
-    {
-      "auxAudioDeices": [],
-      "customSize": false,
-      "desktopAudioDevice1": "default",
-      "desktopAudioDevice2": null,
-      "desktopAudioDevice3": null,
-      "height": 1080,
-      "id": "1",
-      "lockAspectRatio": true,
-      "name": "BR-Render",
-      "overflowHidden": true,
-      "sceneUuid": "00000000-0000-0000-0000-000000000001",
-      "sources": [
+    "current_scene": "BR-Render",
+    "current_program_scene": "BR-Render",
+    "scene_order": [
         {
-          "bloom_threshold_i": 0,
-          "color_range": 0,
-          "deinterlace_field_order": 0,
-          "deinterlace_mode": 0,
-          "enabled": true,
-          "flags": 0,
-          "hotkeys": {
-            "OBS_HOTKEY_PUSH_TO_MUTE": [],
-            "OBS_HOTKEY_PUSH_TO_TALK": []
-          },
-          "id": "1",
-          "mixers": 0,
-          "muted": false,
-          "name": "Media Source 2",
-          "private_settings": {},
-          "settings": {
-            "local_file": ""
-          },
-          "sync": 0,
-          "versioned_id": "ffmpeg_source",
-          "volume": 1.0
+            "name": "BR-Render"
         }
-      ],
-      "uuid": "00000000-0000-0000-0000-000000000001",
-      "virtualCamAudioDevice": null,
-      "width": 1920
-    }
-  ],
-  "sources": [],
-  "version": 1
+    ],
+    "name": "Automation",
+    "sources": [
+        {
+            "prev_ver": 536870914,
+            "name": "BR-Render",
+            "uuid": "00000000-0000-0000-0000-000000000001",
+            "id": "scene",
+            "versioned_id": "scene",
+            "settings": {
+                "id_counter": 1,
+                "custom_size": false,
+                "items": [
+                    {
+                        "name": "Media Source 2",
+                        "source_uuid": "00000000-0000-0000-0000-000000000002"
+                    }
+                ]
+            },
+            "mixers": 0,
+            "sync": 0,
+            "flags": 0,
+            "volume": 1.0,
+            "balance": 0.5,
+            "enabled": true,
+            "muted": false,
+            "push-to-mute": false,
+            "push-to-mute-delay": 0,
+            "push-to-talk": false,
+            "push-to-talk-delay": 0,
+            "hotkeys": {
+                "OBSBasic.SelectScene": []
+            },
+            "deinterlace_mode": 0,
+            "deinterlace_field_order": 0,
+            "monitoring_type": 0,
+            "canvas_uuid": "6c69626f-6273-4c00-9d88-c5136d61696e",
+            "private_settings": {}
+        },
+        {
+            "prev_ver": 536870914,
+            "name": "Media Source 2",
+            "uuid": "00000000-0000-0000-0000-000000000002",
+            "id": "ffmpeg_source",
+            "versioned_id": "ffmpeg_source",
+            "settings": {
+                "local_file": ""
+            },
+            "mixers": 0,
+            "sync": 0,
+            "flags": 0,
+            "volume": 1.0,
+            "balance": 0.5,
+            "enabled": true,
+            "muted": false,
+            "push-to-mute": false,
+            "push-to-mute-delay": 0,
+            "push-to-talk": false,
+            "push-to-talk-delay": 0,
+            "hotkeys": {
+                "OBS_HOTKEY_PUSH_TO_MUTE": [],
+                "OBS_HOTKEY_PUSH_TO_TALK": []
+            },
+            "deinterlace_mode": 0,
+            "deinterlace_field_order": 0,
+            "monitoring_type": 0,
+            "canvas_uuid": "6c69626f-6273-4c00-9d88-c5136d61696e",
+            "private_settings": {}
+        }
+    ],
+    "groups": [],
+    "quick_transitions": [
+        {
+            "name": "Cut",
+            "duration": 300,
+            "hotkeys": [],
+            "id": 1,
+            "fade_to_black": false
+        },
+        {
+            "name": "Fade",
+            "duration": 300,
+            "hotkeys": [],
+            "id": 2,
+            "fade_to_black": false
+        },
+        {
+            "name": "Fade",
+            "duration": 300,
+            "hotkeys": [],
+            "id": 3,
+            "fade_to_black": true
+        }
+    ],
+    "transitions": [],
+    "saved_projectors": [],
+    "canvases": [],
+    "current_transition": "Fade",
+    "transition_duration": 300,
+    "preview_locked": false,
+    "scaling_enabled": false,
+    "scaling_level": -17,
+    "scaling_off_x": 0.0,
+    "scaling_off_y": 0.0,
+    "virtual-camera": {
+        "type2": 3
+    },
+    "modules": {
+        "scripts-tool": [],
+        "output-timer": {
+            "streamTimerHours": 0,
+            "streamTimerMinutes": 0,
+            "streamTimerSeconds": 30,
+            "recordTimerHours": 0,
+            "recordTimerMinutes": 0,
+            "recordTimerSeconds": 30,
+            "autoStartStreamTimer": false,
+            "autoStartRecordTimer": false,
+            "pauseRecordTimer": true
+        },
+        "auto-scene-switcher": {
+            "interval": 300,
+            "non_matching_scene": "",
+            "switch_if_not_matching": false,
+            "active": false,
+            "switches": []
+        }
+    },
+    "version": 2
 }
 EOF
 

@@ -143,7 +143,7 @@ class ObsRenderer:
             if sys.platform.startswith("linux"):
                 # Try common OBS installation locations on Linux
                 try:
-                    subprocess.Popen(["obs"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    subprocess.Popen(["obs", "--profile", "Automation"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                     print("[✓] OBS startup command sent (Linux)")
                 except FileNotFoundError:
                     print("[!] obs command not found in PATH")

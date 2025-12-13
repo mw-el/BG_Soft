@@ -39,10 +39,10 @@ else
 
     echo "[→] Launching OBS Studio (Flatpak) in background..."
 
-    # Start OBS in background, hide the window
+    # Start OBS in background with Automation profile, hide the window
     (
         sleep 2  # Give flatpak time to initialize
-        flatpak run com.obsproject.Studio > /tmp/obs.log 2>&1
+        flatpak run com.obsproject.Studio --profile "Automation" > /tmp/obs.log 2>&1
     ) &
 
     OBS_PID=$!
