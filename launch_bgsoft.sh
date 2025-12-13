@@ -4,10 +4,14 @@
 
 set -euo pipefail
 
-# Ensure we have a proper environment when launched from desktop
-export PATH="$HOME/miniconda3/bin:$HOME/bin:$PATH"
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Initialize conda and activate BG-Soft environment
+eval "$(conda shell.bash hook)" 2>/dev/null || true
+conda activate BG-Soft 2>/dev/null || true
+
+# Also ensure base conda bin is in PATH as fallback
+export PATH="$HOME/miniconda3/envs/BG-Soft/bin:$HOME/miniconda3/bin:$HOME/bin:$PATH"
 
 # Cleanup function to stop OBS when BG-Soft exits
 cleanup() {
