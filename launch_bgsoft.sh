@@ -76,12 +76,7 @@ else
     echo "[✓] OBS is already running"
 fi
 
-# Always wait adequate time for OBS WebSocket server to be ready
-# (even if OBS process exists, WebSocket might not be fully initialized)
-echo "[→] Waiting for OBS WebSocket server to be ready..."
-sleep 8
-
-# Launch the GUI (without exec to allow trap to trigger)
+# Launch the GUI immediately - WebSocket connection retries will handle delays
 echo "[→] Launching BG-Soft GUI..."
 
 "$PYTHON" "$SCRIPT_DIR/bg_soft_gui.py"

@@ -102,7 +102,7 @@ class ObsRenderer:
 
     def _connect_with_retry(self) -> obs.ReqClient:
         """Connect to OBS, with automatic startup attempt if needed."""
-        max_retries = 3
+        max_retries = 20
         retry_delay = 0.5
 
         for attempt in range(max_retries):
