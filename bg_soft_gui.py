@@ -409,9 +409,11 @@ def main() -> int:
     app = QtWidgets.QApplication(sys.argv)
     app.setApplicationName("BG-Soft")
     app.setApplicationVersion("1.0")
+    app.setApplicationDisplayName("BG-Soft")
     app.setStyle("Fusion")
     window = MainWindow()
     window.setWindowIcon(QtGui.QIcon(str(pathlib.Path(__file__).parent / "bgsoft.png")))
+    window.setProperty("WM_CLASS", "bgsoft")
     window.show()
     return app.exec_()
 
