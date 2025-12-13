@@ -36,9 +36,11 @@ else
 
     echo "[→] Launching OBS via Flatpak..."
 
+    # Launch OBS and disown it so it doesn't become a zombie when start_obs.sh exits
     flatpak run com.obsproject.Studio > /tmp/obs.log 2>&1 &
-
     OBS_PID=$!
+    disown $OBS_PID
+
     echo "[→] OBS PID: $OBS_PID"
     echo "[→] Waiting for OBS to start..."
     sleep 5
