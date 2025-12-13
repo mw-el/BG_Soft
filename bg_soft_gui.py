@@ -14,6 +14,7 @@ from obs_controller import (
     ObsRenderer,
     RenderError,
     SharpenSettings,
+    load_settings,
     open_with_system_handler,
 )
 
@@ -116,7 +117,9 @@ class BackgroundSettingsWidget(QtWidgets.QGroupBox):
         self.similarity_threshold.setValue(100.0)
         self.blur_background = QtWidgets.QSpinBox()
         self.blur_background.setRange(0, 20)
-        self.blur_background.setValue(2)
+        settings = load_settings()
+        blur_default = settings.get("background_removal", {}).get("blur_background", 3)
+        self.blur_background.setValue(blur_default)
         self.threshold_value = QtWidgets.QDoubleSpinBox()
         self.threshold_value.setRange(0.0, 1.0)
         self.threshold_value.setSingleStep(0.05)
@@ -287,48 +290,113 @@ class RenderWorker(QtCore.QThread):
             self.batch_completed.emit(successes, failures)
 
 
-class MainWindow(QtWidgets.QWidget):
-    def __init__(self) -> None:
-        super().__init__()
-        self.setWindowTitle("BG-Soft Automatisierung")
-        self.resize(1000, 700)
+class SettingsDialog(QtWidgets.QDialog):
+    """Modal dialog for all application settings."""
+    def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Einstellungen")
+        self.resize(900, 600)
 
         self.conn_widget = ConnectionSettingsWidget()
         self.bg_widget = BackgroundSettingsWidget()
         self.sharpen_widget = SharpenSettingsWidget()
+
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+        container = QtWidgets.QWidget()
+        container_layout = QtWidgets.QVBoxLayout(container)
+        container_layout.addWidget(self.conn_widget)
+        container_layout.addWidget(self.bg_widget)
+        container_layout.addWidget(self.sharpen_widget)
+        container_layout.addStretch()
+        scroll.setWidget(container)
+
+        button_layout = QtWidgets.QHBoxLayout()
+        ok_btn = QtWidgets.QPushButton("OK")
+        cancel_btn = QtWidgets.QPushButton("Abbrechen")
+        button_layout.addStretch()
+        button_layout.addWidget(ok_btn)
+        button_layout.addWidget(cancel_btn)
+
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.addWidget(scroll)
+        layout.addLayout(button_layout)
+
+        ok_btn.clicked.connect(self.accept)
+        cancel_btn.clicked.connect(self.reject)
+
+    def get_settings(self) -> tuple[ConnectionSettings, BackgroundRemovalSettings, SharpenSettings]:
+        """Get current settings from all widgets."""
+        return (
+            self.conn_widget.get_settings(),
+            self.bg_widget.get_settings(),
+            self.sharpen_widget.get_settings(),
+        )
+
+
+class MainWindow(QtWidgets.QWidget):
+    def __init__(self) -> None:
+        super().__init__()
+        self.setWindowTitle("BG-Soft Automatisierung")
+        self.resize(1200, 600)
+
+        # Apply 50% larger fonts globally (much bigger)
+        font = QtGui.QFont()
+        font.setPointSize(int(font.pointSize() * 1.5))
+        self.setFont(font)
+
         self.file_table = FileTable()
         self.log = QtWidgets.QPlainTextEdit()
         self.log.setReadOnly(True)
 
+        # Top bar with settings and file management buttons
+        top_layout = QtWidgets.QHBoxLayout()
+        self.settings_btn = QtWidgets.QPushButton("⚙ Einstellungen")
+        self.settings_btn.setMinimumHeight(int(48 * 1.5))
+        settings_font = self.settings_btn.font()
+        settings_font.setPointSize(int(settings_font.pointSize() * 1.5))
+        self.settings_btn.setFont(settings_font)
+
         file_buttons = QtWidgets.QHBoxLayout()
-        self.add_btn = QtWidgets.QPushButton("Dateien hinzufügen")
-        self.remove_btn = QtWidgets.QPushButton("Auswahl entfernen")
-        self.clear_btn = QtWidgets.QPushButton("Liste leeren")
+        self.add_btn = QtWidgets.QPushButton("+ Dateien hinzufügen")
+        self.remove_btn = QtWidgets.QPushButton("✕ Entfernen")
+        self.clear_btn = QtWidgets.QPushButton("⊟ Leeren")
+        for btn in [self.add_btn, self.remove_btn, self.clear_btn]:
+            btn.setMinimumHeight(int(48 * 1.5))
+            btn_font = btn.font()
+            btn_font.setPointSize(int(btn_font.pointSize() * 1.5))
+            btn.setFont(btn_font)
+
         file_buttons.addWidget(self.add_btn)
         file_buttons.addWidget(self.remove_btn)
         file_buttons.addWidget(self.clear_btn)
 
-        self.start_btn = QtWidgets.QPushButton("Batch starten")
-        self.open_output_btn = QtWidgets.QPushButton("Ausgabe öffnen")
+        top_layout.addWidget(self.settings_btn)
+        top_layout.addLayout(file_buttons)
 
+        # Main batch control buttons
         controls_layout = QtWidgets.QHBoxLayout()
+        self.start_btn = QtWidgets.QPushButton("▶ Batch starten")
+        self.open_output_btn = QtWidgets.QPushButton("📁 Ausgabe öffnen")
+        for btn in [self.start_btn, self.open_output_btn]:
+            btn.setMinimumHeight(int(56 * 1.5))  # Even larger for main actions
+            btn_font = btn.font()
+            btn_font.setPointSize(int(btn_font.pointSize() * 1.5))
+            btn_font.setBold(True)
+            btn.setFont(btn_font)
+
         controls_layout.addWidget(self.start_btn)
         controls_layout.addWidget(self.open_output_btn)
         controls_layout.addStretch()
 
-        settings_layout = QtWidgets.QHBoxLayout()
-        settings_layout.addWidget(self.conn_widget, 1)
-        settings_layout.addWidget(self.bg_widget, 2)
-        settings_layout.addWidget(self.sharpen_widget, 1)
-
         layout = QtWidgets.QVBoxLayout(self)
-        layout.addLayout(settings_layout)
+        layout.addLayout(top_layout)
         layout.addWidget(self.file_table, 1)
-        layout.addLayout(file_buttons)
         layout.addLayout(controls_layout)
-        layout.addWidget(QtWidgets.QLabel("Log"))
         layout.addWidget(self.log, 1)
 
+        # Connect signals
+        self.settings_btn.clicked.connect(self.open_settings)
         self.add_btn.clicked.connect(self.add_files)
         self.remove_btn.clicked.connect(self.file_table.remove_selected)
         self.clear_btn.clicked.connect(self.file_table.clear_all)
@@ -336,6 +404,23 @@ class MainWindow(QtWidgets.QWidget):
         self.open_output_btn.clicked.connect(self.open_selected_output)
 
         self.worker: Optional[RenderWorker] = None
+        self.settings_dialog: Optional[SettingsDialog] = None
+
+        # Store current settings
+        self.conn_settings = ConnectionSettings()
+        self.bg_settings = BackgroundRemovalSettings()
+        self.sharpen_settings = SharpenSettings()
+        self.poll_interval = 0.5
+
+    def open_settings(self) -> None:
+        """Open the settings modal dialog."""
+        if self.settings_dialog is None:
+            self.settings_dialog = SettingsDialog(self)
+
+        if self.settings_dialog.exec_() == QtWidgets.QDialog.Accepted:
+            self.conn_settings, self.bg_settings, self.sharpen_settings = self.settings_dialog.get_settings()
+            self.poll_interval = self.settings_dialog.conn_widget.get_poll_interval()
+            self.log.appendPlainText("Einstellungen aktualisiert.")
 
     def add_files(self) -> None:
         paths, _ = QtWidgets.QFileDialog.getOpenFileNames(self, "Videos auswählen")
@@ -352,12 +437,9 @@ class MainWindow(QtWidgets.QWidget):
             QtWidgets.QMessageBox.warning(self, "Keine Dateien", "Bitte zuerst mindestens eine Datei hinzufügen.")
             return
 
-        conn = self.conn_widget.get_settings()
-        background = self.bg_widget.get_settings()
-        sharpen = self.sharpen_widget.get_settings()
-        poll_interval = self.conn_widget.get_poll_interval()
-
-        self.worker = RenderWorker(files, conn, background, sharpen, poll_interval)
+        self.worker = RenderWorker(
+            files, self.conn_settings, self.bg_settings, self.sharpen_settings, self.poll_interval
+        )
         self.worker.file_started.connect(self.on_file_started)
         self.worker.file_finished.connect(self.on_file_finished)
         self.worker.file_failed.connect(self.on_file_failed)

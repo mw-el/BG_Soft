@@ -12,17 +12,36 @@ from obs_controller import (
     ObsRenderer,
     RenderError,
     SharpenSettings,
+    load_settings,
 )
 
-DEFAULT_HOST = "localhost"
-DEFAULT_PORT = 4455
-DEFAULT_PASSWORD = "obsstudio"
-DEFAULT_SCENE = "BR-Render"
-DEFAULT_INPUT = "Media Source"
-DEFAULT_BACKGROUND_FILTER = "Background Removal"
-DEFAULT_SHARPEN_FILTER = "Sharpen"
-DEFAULT_SHARPNESS = 0.15
-POLL_INTERVAL = 0.5
+def _get_cli_defaults():
+    """Load CLI defaults from settings file."""
+    settings = load_settings()
+    conn_settings = settings.get("connection", {})
+    cli_settings = settings.get("cli_defaults", {})
+    return {
+        "host": conn_settings.get("host", "localhost"),
+        "port": conn_settings.get("port", 4455),
+        "password": conn_settings.get("password", "obsstudio"),
+        "scene": "BR-Render",
+        "input": "Media Source",
+        "background_filter": "Background Removal",
+        "sharpen_filter": "Sharpen",
+        "sharpness": cli_settings.get("default_sharpness", 0.15),
+        "poll_interval": 0.5,
+    }
+
+_CLI_DEFAULTS = _get_cli_defaults()
+DEFAULT_HOST = _CLI_DEFAULTS["host"]
+DEFAULT_PORT = _CLI_DEFAULTS["port"]
+DEFAULT_PASSWORD = _CLI_DEFAULTS["password"]
+DEFAULT_SCENE = _CLI_DEFAULTS["scene"]
+DEFAULT_INPUT = _CLI_DEFAULTS["input"]
+DEFAULT_BACKGROUND_FILTER = _CLI_DEFAULTS["background_filter"]
+DEFAULT_SHARPEN_FILTER = _CLI_DEFAULTS["sharpen_filter"]
+DEFAULT_SHARPNESS = _CLI_DEFAULTS["sharpness"]
+POLL_INTERVAL = _CLI_DEFAULTS["poll_interval"]
 
 
 def parse_args() -> argparse.Namespace:

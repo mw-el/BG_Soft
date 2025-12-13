@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 import os
 import pathlib
 import shutil
@@ -10,12 +11,24 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 import obsws_python as obs
 from obsws_python.error import OBSSDKRequestError
 
 DEFAULT_MODEL_SELFIE = "models/selfie_segmentation.onnx"
+
+
+def load_settings(settings_file: str = "settings.json") -> Dict[str, Any]:
+    """Load settings from JSON file. Returns dict with defaults if file not found."""
+    file_path = pathlib.Path(settings_file)
+    if file_path.exists():
+        try:
+            with open(file_path, "r") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError) as e:
+            print(f"Warning: Could not load settings file: {e}")
+    return {}
 
 
 class RenderError(RuntimeError):
@@ -33,6 +46,32 @@ class ConnectionSettings:
     sharpen_filter_name: str = "Sharpen"
 
 
+def _get_background_removal_defaults() -> Dict[str, Any]:
+    """Get background removal defaults from settings file or hardcoded values."""
+    settings = load_settings()
+    bg_settings = settings.get("background_removal", {})
+    return {
+        "advanced": bg_settings.get("advanced", True),
+        "enable_threshold": bg_settings.get("enable_threshold", True),
+        "threshold": bg_settings.get("threshold", 0.65),
+        "contour_filter": bg_settings.get("contour_filter", 1.0),
+        "smooth_contour": bg_settings.get("smooth_contour", 0.05),
+        "mask_expansion": bg_settings.get("mask_expansion", -5),
+        "use_gpu": bg_settings.get("use_gpu", "cpu"),
+        "mask_every_x_frames": bg_settings.get("mask_every_x_frames", 1),
+        "num_threads": bg_settings.get("num_threads", 8),
+        "model_select": bg_settings.get("model_select", "models/SINet_Softmax_simple.onnx"),
+        "temporal_smooth_factor": bg_settings.get("temporal_smooth_factor", 0.5),
+        "enable_image_similarity": bg_settings.get("enable_image_similarity", True),
+        "image_similarity_threshold": bg_settings.get("image_similarity_threshold", 100.0),
+        "blur_background": bg_settings.get("blur_background", 3),
+        "enable_focal_blur": bg_settings.get("enable_focal_blur", True),
+        "blur_focus_point": bg_settings.get("blur_focus_point", 0.05),
+        "blur_focus_depth": bg_settings.get("blur_focus_depth", 0.16),
+        "feather": bg_settings.get("feather", 0.0),
+    }
+
+
 @dataclass
 class BackgroundRemovalSettings:
     advanced: bool = True
@@ -48,7 +87,7 @@ class BackgroundRemovalSettings:
     temporal_smooth_factor: float = 0.5
     enable_image_similarity: bool = True
     image_similarity_threshold: float = 100.0
-    blur_background: int = 2
+    blur_background: int = 3
     enable_focal_blur: bool = True
     blur_focus_point: float = 0.05
     blur_focus_depth: float = 0.16

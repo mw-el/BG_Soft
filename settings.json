@@ -1,0 +1,23 @@
+{
+  "connection": {
+    "host": "localhost",
+    "port": 4455,
+    "password": "obsstudio"
+  },
+  "background_removal": {
+    "blur_background": 3,
+    "enable_focal_blur": true,
+    "blur_focus_point": 0.05,
+    "blur_focus_depth": 0.16,
+    "transparency_threshold": 0.8,
+    "model_name": "SINet_Softmax_simple.onnx"
+  },
+  "sharpen": {
+    "sharpness": 0.0,
+    "unsharpmask_radius": 2.0
+  },
+  "cli_defaults": {
+    "default_sharpness": 0.10,
+    "default_unsharpmask_radius": 2.0
+  }
+}
