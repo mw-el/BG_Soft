@@ -35,4 +35,4 @@ fi
 
 # Launch the GUI
 echo "[→] Launching BG-Soft GUI..."
-exec python "$SCRIPT_DIR/bg_soft_gui.py"
+python "$SCRIPT_DIR/bg_soft_gui.py"
