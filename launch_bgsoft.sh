@@ -6,22 +6,16 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Flag to track if we started OBS
-OBS_STARTED_BY_US=0
-
 # Cleanup function to stop OBS when BG-Soft exits
 cleanup() {
-    if [[ $OBS_STARTED_BY_US -eq 1 ]]; then
-        echo "[→] Cleaning up OBS (started by BG-Soft)..."
-        # Kill all OBS instances that we started
-        pkill -9 -f "bwrap.*obs" 2>/dev/null || true
-        pkill -9 obs 2>/dev/null || true
-        pkill -9 -f "com.obsproject.Studio" 2>/dev/null || true
-        sleep 2
-        echo "[✓] OBS cleaned up"
-    else
-        echo "[→] OBS was already running before BG-Soft started, leaving it running"
-    fi
+    echo "[→] Cleaning up OBS..."
+    # Try graceful shutdown first
+    pkill -TERM obs 2>/dev/null || true
+    sleep 2
+    # Force kill if still running
+    pkill -9 -f "bwrap.*obs" 2>/dev/null || true
+    pkill -9 obs 2>/dev/null || true
+    sleep 1
 }
 
 # Register cleanup to run on exit
@@ -34,16 +28,15 @@ if [[ ! -d "$HOME/.config/obs-studio/basic/profiles/Automation" ]]; then
     "$SCRIPT_DIR/setup_obs_automation.sh"
 fi
 
-# Check if OBS (native) is running, exclude zombies
-if ! (ps aux | grep -v grep | grep /usr/bin/obs | grep -v "Z" > /dev/null 2>&1); then
+# Check if OBS is already running
+if ! pgrep obs > /dev/null 2>&1; then
     echo "[→] Starting OBS..."
-    OBS_STARTED_BY_US=1
     "$SCRIPT_DIR/start_obs.sh" &
-    sleep 15  # Give OBS time to start (wait longer than start_obs.sh's 10s + overhead)
+    sleep 10  # Give OBS time to start
 else
-    echo "[✓] OBS is already running (started externally)"
+    echo "[✓] OBS is already running"
 fi
 
-# Launch the GUI
+# Launch the GUI (without exec to allow trap to trigger)
 echo "[→] Launching BG-Soft GUI..."
 python "$SCRIPT_DIR/bg_soft_gui.py"

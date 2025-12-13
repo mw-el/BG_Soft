@@ -1,11 +1,8 @@
 #!/bin/bash
 # Start OBS with Automation profile for BG-Soft
 
-set -eu pipefail
+set -euo pipefail
 
-# Set LD_LIBRARY_PATH for ONNX Runtime 1.21.0 GPU libraries from conda obs-build environment
-# The GPU plugin requires ONNX Runtime 1.21.0 with CUDA support
-export LD_LIBRARY_PATH="$HOME/miniconda3/envs/obs-build/lib:${LD_LIBRARY_PATH:-}"
 export PATH=~/bin:$PATH
 
 echo "Starting OBS Studio with Automation profile..."
@@ -23,8 +20,8 @@ if [[ ! -d "$HOME/.config/obs-studio/basic/profiles/Automation" ]]; then
     exit 1
 fi
 
-# Check if OBS is already running (exclude zombies)
-if ps aux | grep -v grep | grep /usr/bin/obs | grep -v "Z" > /dev/null 2>&1; then
+# Check if OBS is already running
+if pgrep obs > /dev/null 2>&1; then
     echo "[✓] OBS is already running"
     sleep 1
 else
@@ -37,35 +34,17 @@ else
     fi
     echo "SceneCollection=Automation" >> "$AUTOMATION_PROFILE_INI"
 
-    echo "[→] Launching OBS Studio in background..."
+    echo "[→] Launching OBS via Flatpak..."
 
-    # Start OBS in background with Automation profile, hide the window
-    (
-        sleep 2  # Give OBS time to initialize
-        /usr/bin/obs --profile "Automation" > /tmp/obs.log 2>&1
-    ) &
+    flatpak run com.obsproject.Studio > /tmp/obs.log 2>&1 &
 
     OBS_PID=$!
     echo "[→] OBS PID: $OBS_PID"
     echo "[→] Waiting for OBS to start..."
-    sleep 10
+    sleep 5
 
-    if ps aux | grep -v grep | grep /usr/bin/obs | grep -v "Z" > /dev/null 2>&1; then
+    if pgrep obs > /dev/null 2>&1; then
         echo "[✓] OBS started successfully"
-
-        # Minimize OBS window to run invisibly in the background
-        echo "[→] Minimizing OBS window..."
-        (
-            sleep 2
-            # Find OBS window and minimize it
-            if command -v xdotool >/dev/null 2>&1; then
-                # Search for OBS window by name
-                window_id=$(xdotool search --name "OBS Studio" 2>/dev/null | head -1)
-                if [[ -n "$window_id" ]]; then
-                    xdotool windowminimize "$window_id" 2>/dev/null || true
-                fi
-            fi
-        ) &
     else
         echo "[✗] OBS failed to start"
         cat /tmp/obs.log
@@ -81,8 +60,7 @@ echo
 echo "Configuration status:"
 echo
 echo "1. WebSocket Server"
-WEBSOCKET_CONFIG="$HOME/.config/obs-studio/plugin_config/obs-websocket/config.json"
-if [[ -f "$WEBSOCKET_CONFIG" ]] && grep -q '"server_enabled":\s*true' "$WEBSOCKET_CONFIG" 2>/dev/null; then
+if grep -q "websocket_server_enabled\|server_enabled.*true" "$HOME/.config/obs-studio/plugin_config/obs-websocket/config.json" 2>/dev/null; then
     echo "   [✓] WebSocket Server is enabled"
 else
     echo "   [!] WebSocket Server needs to be enabled"
