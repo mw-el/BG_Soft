@@ -13,11 +13,11 @@ if [[ ! -d "$HOME/.config/obs-studio/basic/profiles/Automation" ]]; then
     "$SCRIPT_DIR/setup_obs_automation.sh"
 fi
 
-# Check if OBS is running with Automation profile
-if ! pgrep -f "obs.*--profile.*Automation" > /dev/null 2>&1; then
-    echo "[→] Starting OBS with Automation profile..."
+# Check if OBS is running
+if ! pgrep flatpak > /dev/null 2>&1 || ! pgrep -f "obsproject.Studio" > /dev/null 2>&1; then
+    echo "[→] Starting OBS..."
     "$SCRIPT_DIR/start_obs.sh" &
-    sleep 3  # Give OBS time to start
+    sleep 5  # Give OBS time to start
 fi
 
 # Launch the GUI

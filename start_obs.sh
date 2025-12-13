@@ -34,14 +34,9 @@ else
     fi
     echo "SceneCollection=Automation" >> "$AUTOMATION_PROFILE_INI"
 
-    echo "[→] Launching OBS..."
+    echo "[→] Launching OBS via Flatpak..."
 
-    # Try native OBS first, fall back to flatpak
-    if command -v obs >/dev/null 2>&1; then
-        obs > /tmp/obs.log 2>&1 &
-    else
-        flatpak run com.obsproject.Studio > /tmp/obs.log 2>&1 &
-    fi
+    flatpak run com.obsproject.Studio > /tmp/obs.log 2>&1 &
 
     OBS_PID=$!
     echo "[→] OBS PID: $OBS_PID"
