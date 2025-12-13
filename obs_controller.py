@@ -508,6 +508,9 @@ class ObsRenderer:
             print(f"[!] Could not clear old file (might be okay): {e}")
 
         # Now load the new file with proper settings
+        print(f"[→] Setting file path for input '{self.conn.input_name}'")
+        print(f"    File: {source}")
+
         self.client.set_input_settings(
             self.conn.input_name,
             {
@@ -517,18 +520,24 @@ class ObsRenderer:
             },
             overlay=True,
         )
-        print("[→] Media file loaded, waiting for decoder initialization...")
+        print("[→] Settings sent to OBS, waiting for decoder initialization...")
         time.sleep(5)  # Let media source fully load and decode first frame
 
         # Verify the file loaded without errors
         try:
             status = self.client.get_media_input_status(self.conn.input_name)
             media_state = getattr(status, "media_state", None)
+            print(f"[→] Media input status check:")
+            print(f"    Input: {self.conn.input_name}")
+            print(f"    State: {media_state}")
+
             if media_state == "OBS_MEDIA_STATE_ERROR":
                 raise RenderError(f"Failed to load media file: {source}")
-            print(f"[✓] Media file ready (state: {media_state})")
+            print(f"[✓] Media file ready")
         except OBSSDKRequestError as e:
             print(f"[!] Could not verify media state: {e}")
+        except Exception as e:
+            print(f"[!] Error during media verification: {e}")
 
         if background_settings or sharpen_settings:
             self.apply_filter_settings(background_settings, sharpen_settings)

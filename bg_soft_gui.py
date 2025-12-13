@@ -47,7 +47,7 @@ class ConnectionSettingsWidget(QtWidgets.QGroupBox):
         self.password = QtWidgets.QLineEdit("obsstudio")
         self.password.setEchoMode(QtWidgets.QLineEdit.Password)
         self.scene = QtWidgets.QLineEdit("BR-Render")
-        self.input_name = QtWidgets.QLineEdit("Media Source")
+        self.input_name = QtWidgets.QLineEdit("Media Source 2")
         self.bg_filter = QtWidgets.QLineEdit("Background Removal")
         self.sharpen_filter = QtWidgets.QLineEdit("Sharpen")
         self.poll_interval = QtWidgets.QDoubleSpinBox()
@@ -70,7 +70,7 @@ class ConnectionSettingsWidget(QtWidgets.QGroupBox):
             port=int(self.port.value()),
             password=self.password.text(),
             scene_name=self.scene.text().strip() or "BR-Render",
-            input_name=self.input_name.text().strip() or "BR-Clip",
+            input_name=self.input_name.text().strip() or "Media Source 2",
             background_filter_name=self.bg_filter.text().strip() or "Background Removal",
             sharpen_filter_name=self.sharpen_filter.text().strip() or "Sharpen",
         )
