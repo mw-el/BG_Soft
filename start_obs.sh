@@ -34,9 +34,9 @@ else
     fi
     echo "SceneCollection=Automation" >> "$AUTOMATION_PROFILE_INI"
 
-    echo "[→] Launching OBS via Flatpak..."
+    echo "[→] Launching native OBS Studio..."
 
-    flatpak run com.obsproject.Studio > /tmp/obs.log 2>&1 &
+    obs > /tmp/obs.log 2>&1 &
 
     OBS_PID=$!
     echo "[→] OBS PID: $OBS_PID"
