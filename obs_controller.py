@@ -329,6 +329,32 @@ class ObsRenderer:
             print(f"[!] Could not get video duration: {e}")
         return 0.0
 
+    def _wait_for_playback_started(self) -> None:
+        """Wait until media is actually playing and rendering frames."""
+        max_wait = 10  # Maximum 10 seconds to wait for playback to start
+        start_time = time.time()
+
+        while time.time() - start_time < max_wait:
+            try:
+                status = self.client.get_media_input_status(self.conn.input_name)
+                media_state = getattr(status, "media_state", None)
+
+                if media_state == "OBS_MEDIA_STATE_PLAYING":
+                    print("[✓] Media is playing, recording started capture")
+                    time.sleep(0.5)  # Small extra buffer to ensure first frame is captured
+                    return
+                elif media_state == "OBS_MEDIA_STATE_ERROR":
+                    raise RenderError("Media playback error detected")
+            except OBSSDKRequestError:
+                # OBS might not be ready yet, that's okay
+                pass
+            except Exception as e:
+                print(f"[!] Error waiting for playback: {e}")
+
+            time.sleep(0.2)  # Check frequently
+
+        print("[!] Warning: Playback didn't reach 'playing' state within timeout, continuing anyway")
+
     def _monitor_and_auto_stop(self, duration_sec: float) -> None:
         """Monitor playback and auto-stop recording when video finishes or duration elapses."""
         if duration_sec <= 0:
@@ -470,15 +496,18 @@ class ObsRenderer:
         # Start recording BEFORE triggering playback to capture from the beginning
         self.client.start_record()
         print("Recording started...")
-        time.sleep(3)  # Give encoder time to fully initialize
+        time.sleep(1)  # Minimal delay for encoder initialization
 
-        # Now trigger playback
+        # Now trigger playback immediately
         self.client.trigger_media_input_action(
             self.conn.input_name,
             "OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART",
         )
         print("Media playback triggered...")
-        time.sleep(4)  # Give media time to load and actually render first frame
+
+        # Wait for media to actually be playing and rendering
+        # This ensures frames are being captured to the recording
+        self._wait_for_playback_started()
 
         # Monitor playback and auto-stop recording when done
         try:
