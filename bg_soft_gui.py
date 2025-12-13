@@ -485,10 +485,22 @@ class MainWindow(QtWidgets.QWidget):
 
 
 def main() -> int:
+    # Enable HiDPI scaling for high-resolution displays
+    QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling, True)
+    QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_UseHighDpiPixmaps, True)
+
     app = QtWidgets.QApplication(sys.argv)
     app.setApplicationName("BG-Soft")
     app.setApplicationVersion("1.0")
     app.setApplicationDisplayName("BG-Soft")
+
+    # Scale fonts and UI for HiDPI
+    dpi_scale = app.primaryScreen().logicalDotsPerInch() / 96.0
+    if dpi_scale > 1.2:  # HiDPI detected (>120 DPI, typical is 96)
+        # Scale application font
+        font = app.font()
+        font.setPointSize(int(font.pointSize() * 2))  # 2x larger
+        app.setFont(font)
 
     # Load colorful stylesheet
     stylesheet_path = pathlib.Path(__file__).parent / "stylesheet.qss"
