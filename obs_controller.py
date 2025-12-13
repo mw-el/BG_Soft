@@ -463,6 +463,33 @@ class ObsRenderer:
             raise RenderError(
                 f"OBS konnte die Szene '{self.conn.scene_name}' nicht aktivieren: {exc}"
             ) from exc
+
+        # Clean OBS state: stop any currently playing media and clear old file reference
+        print("[→] Clearing OBS media state...")
+        try:
+            # First, pause any playing media
+            self.client.trigger_media_input_action(
+                self.conn.input_name,
+                "OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PAUSE",
+            )
+            print("[→] Stopped any previously playing media...")
+            time.sleep(0.5)
+        except Exception as e:
+            print(f"[!] Could not pause media (might be okay): {e}")
+
+        # Clear the old file path completely to ensure clean slate
+        try:
+            self.client.set_input_settings(
+                self.conn.input_name,
+                {"local_file": ""},  # Clear the file path first
+                overlay=True,
+            )
+            print("[→] Cleared old media file reference...")
+            time.sleep(1)  # Let OBS fully release the old file
+        except Exception as e:
+            print(f"[!] Could not clear old file (might be okay): {e}")
+
+        # Now load the new file
         self.client.set_input_settings(
             self.conn.input_name,
             {"local_file": str(source)},
