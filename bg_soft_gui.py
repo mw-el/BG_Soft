@@ -346,6 +346,7 @@ class MainWindow(QtWidgets.QWidget):
         # Top bar with settings and file management buttons
         top_layout = QtWidgets.QHBoxLayout()
         self.settings_btn = QtWidgets.QPushButton("⚙ Einstellungen")
+        self.settings_btn.setObjectName("settingsBtn")
         self.settings_btn.setMinimumHeight(int(48 * 1.5))
         settings_font = self.settings_btn.font()
         settings_font.setPointSize(int(settings_font.pointSize() * 1.5))
@@ -354,6 +355,7 @@ class MainWindow(QtWidgets.QWidget):
         file_buttons = QtWidgets.QHBoxLayout()
         self.add_btn = QtWidgets.QPushButton("+ Dateien hinzufügen")
         self.remove_btn = QtWidgets.QPushButton("✕ Entfernen")
+        self.remove_btn.setObjectName("removeBtn")
         self.clear_btn = QtWidgets.QPushButton("⊟ Leeren")
         for btn in [self.add_btn, self.remove_btn, self.clear_btn]:
             btn.setMinimumHeight(int(48 * 1.5))
@@ -371,6 +373,7 @@ class MainWindow(QtWidgets.QWidget):
         # Main batch control buttons
         controls_layout = QtWidgets.QHBoxLayout()
         self.start_btn = QtWidgets.QPushButton("▶ Batch starten")
+        self.start_btn.setObjectName("startBtn")
         self.open_output_btn = QtWidgets.QPushButton("📁 Ausgabe öffnen")
         for btn in [self.start_btn, self.open_output_btn]:
             btn.setMinimumHeight(int(56 * 1.5))  # Even larger for main actions
@@ -487,8 +490,13 @@ def main() -> int:
     app.setApplicationVersion("1.0")
     app.setApplicationDisplayName("BG-Soft")
 
-    # Use native OS style (more reliable than qt-material with PyQt5)
-    app.setStyle("Fusion")
+    # Load colorful stylesheet
+    stylesheet_path = pathlib.Path(__file__).parent / "stylesheet.qss"
+    if stylesheet_path.exists():
+        with open(stylesheet_path, "r") as f:
+            app.setStyleSheet(f.read())
+    else:
+        app.setStyle("Fusion")
 
     window = MainWindow()
     window.setWindowIcon(QtGui.QIcon(str(pathlib.Path(__file__).parent / "bgsoft.png")))
