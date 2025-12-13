@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=VG-Soft
+Comment=Automatisierung BG-Soften mit OBS
+Icon=${APP_DIR}/vgsoft.png
+Exec=${CONDA_PREFIX}/bin/python ${APP_DIR}/bg_soft_gui.py
+Path=${APP_DIR}
+Terminal=false
+Categories=Utility;Video;
+StartupNotify=true
+StartupWMClass=vgsoft

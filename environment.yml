@@ -1,0 +1,9 @@
+name: BG-Soft
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+      - obsws-python>=1.8.0,<2
+      - PyQt5>=5.15,<6
