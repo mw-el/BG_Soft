@@ -4,6 +4,9 @@
 
 set -euo pipefail
 
+# Ensure we have a proper environment when launched from desktop
+export PATH="$HOME/miniconda3/bin:$HOME/bin:$PATH"
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Cleanup function to stop OBS when BG-Soft exits
@@ -69,4 +72,11 @@ sleep $WAIT_TIME
 
 # Launch the GUI (without exec to allow trap to trigger)
 echo "[→] Launching BG-Soft GUI..."
+
+# Log to file when launched from desktop (no terminal)
+if [[ ! -t 1 ]]; then
+    exec >> "$HOME/.local/share/bgsoft/launch.log" 2>&1
+    mkdir -p "$HOME/.local/share/bgsoft"
+fi
+
 python "$SCRIPT_DIR/bg_soft_gui.py"
