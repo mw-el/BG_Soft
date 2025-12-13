@@ -43,3 +43,10 @@ Thumbs.db
 
 # Conda
 .conda/
+
+# Generated video files
+*.mkv
+*.mp4
+
+# Models directory (contains large ONNX files)
+models/
