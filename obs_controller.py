@@ -36,22 +36,22 @@ class ConnectionSettings:
 @dataclass
 class BackgroundRemovalSettings:
     advanced: bool = True
-    enable_threshold: bool = False
-    threshold: float = 0.5
-    contour_filter: float = 0.05
-    smooth_contour: float = 0.5
-    mask_expansion: int = 1
+    enable_threshold: bool = True
+    threshold: float = 0.65
+    contour_filter: float = 1.0
+    smooth_contour: float = 0.05
+    mask_expansion: int = -5
     use_gpu: str = "cpu"
     mask_every_x_frames: int = 1
     num_threads: int = 8
-    model_select: str = DEFAULT_MODEL_SELFIE
-    temporal_smooth_factor: float = 0.6
+    model_select: str = "models/SINet_Softmax_simple.onnx"
+    temporal_smooth_factor: float = 0.5
     enable_image_similarity: bool = True
     image_similarity_threshold: float = 100.0
     blur_background: int = 2
-    enable_focal_blur: bool = False
-    blur_focus_point: float = 0.1
-    blur_focus_depth: float = 0.0
+    enable_focal_blur: bool = True
+    blur_focus_point: float = 0.05
+    blur_focus_depth: float = 0.16
     feather: float = 0.0
 
     def to_filter_payload(self) -> Dict[str, object]:
@@ -79,7 +79,7 @@ class BackgroundRemovalSettings:
 
 @dataclass
 class SharpenSettings:
-    sharpness: float = 0.15
+    sharpness: float = 10.0
 
     def to_filter_payload(self) -> Dict[str, float]:
         return {"sharpness": float(self.sharpness)}
