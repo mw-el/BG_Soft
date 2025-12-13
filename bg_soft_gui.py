@@ -12,11 +12,16 @@ from obs_controller import (
     BackgroundRemovalSettings,
     ConnectionSettings,
     ObsRenderer,
-    RenderError,
     SharpenSettings,
     load_settings,
     open_with_system_handler,
 )
+
+try:
+    from qt_material import apply_stylesheet
+    HAS_QT_MATERIAL = True
+except ImportError:
+    HAS_QT_MATERIAL = False
 
 GPU_OPTIONS = [
     ("CPU", "cpu"),
@@ -340,11 +345,6 @@ class MainWindow(QtWidgets.QWidget):
         self.setWindowTitle("BG-Soft Automatisierung")
         self.resize(1200, 600)
 
-        # Apply 50% larger fonts globally (much bigger)
-        font = QtGui.QFont()
-        font.setPointSize(int(font.pointSize() * 1.5))
-        self.setFont(font)
-
         self.file_table = FileTable()
         self.log = QtWidgets.QPlainTextEdit()
         self.log.setReadOnly(True)
@@ -492,7 +492,13 @@ def main() -> int:
     app.setApplicationName("BG-Soft")
     app.setApplicationVersion("1.0")
     app.setApplicationDisplayName("BG-Soft")
-    app.setStyle("Fusion")
+
+    # Apply modern Material Design theme if available
+    if HAS_QT_MATERIAL:
+        apply_stylesheet(app, theme='dark_amber.xml')
+    else:
+        app.setStyle("Fusion")
+
     window = MainWindow()
     window.setWindowIcon(QtGui.QIcon(str(pathlib.Path(__file__).parent / "bgsoft.png")))
     window.setProperty("WM_CLASS", "bgsoft")
