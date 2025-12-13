@@ -17,13 +17,6 @@ from obs_controller import (
     open_with_system_handler,
 )
 
-# Must import qt_material AFTER PyQt5
-try:
-    from qt_material import apply_stylesheet
-    HAS_QT_MATERIAL = True
-except ImportError:
-    HAS_QT_MATERIAL = False
-
 GPU_OPTIONS = [
     ("CPU", "cpu"),
     ("CUDA", "cuda"),
@@ -494,15 +487,8 @@ def main() -> int:
     app.setApplicationVersion("1.0")
     app.setApplicationDisplayName("BG-Soft")
 
-    # Apply modern Material Design theme if available (must be before creating main window)
-    if HAS_QT_MATERIAL:
-        try:
-            apply_stylesheet(app, theme='light_blue.xml')
-        except Exception as e:
-            print(f"Warning: Failed to apply qt-material theme: {e}")
-            app.setStyle("Fusion")
-    else:
-        app.setStyle("Fusion")
+    # Use native OS style (more reliable than qt-material with PyQt5)
+    app.setStyle("Fusion")
 
     window = MainWindow()
     window.setWindowIcon(QtGui.QIcon(str(pathlib.Path(__file__).parent / "bgsoft.png")))
