@@ -225,6 +225,39 @@ class ObsRenderer:
             time.sleep(self.poll_interval)
         return recorded
 
+    def cleanup_media_source(self) -> None:
+        """Clear the media source and load dummy file to prevent missing file errors on next run."""
+        try:
+            dummy_file = pathlib.Path(__file__).parent / "dummy.mp4"
+            if not dummy_file.exists():
+                print(f"[!] Dummy file not found: {dummy_file}")
+                return
+
+            print("[→] Cleaning up media source...")
+
+            # Stop playback
+            try:
+                self.client.trigger_media_input_action(
+                    self.conn.input_name,
+                    "OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PAUSE",
+                )
+                time.sleep(0.5)
+            except Exception:
+                pass  # Media might already be stopped
+
+            # Load dummy file (always available, prevents "file not found" dialog)
+            self.client.set_input_settings(
+                self.conn.input_name,
+                {
+                    "local_file": str(dummy_file.resolve()),
+                    "is_local_file": True,
+                },
+                overlay=True,
+            )
+            print("[✓] Media source reset to dummy file")
+        except Exception as e:
+            print(f"[!] Could not cleanup media source: {e}")
+
     @staticmethod
     def move_output(recorded: pathlib.Path, original: pathlib.Path) -> pathlib.Path:
         """Move the recorded file next to the original clip with the desired suffix."""
@@ -583,6 +616,8 @@ class ObsRenderer:
         finally:
             # Always attempt to stop recording so OBS finalizes the file even if playback failed.
             recorded = self.finalize_record()
+            # Clean up media source to prevent missing file errors next time
+            self.cleanup_media_source()
 
         target = self.move_output(recorded, source)
         return target
