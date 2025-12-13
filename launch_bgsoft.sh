@@ -79,8 +79,8 @@ echo "[→] Launching BG-Soft GUI..."
 
 # Log to file when launched from desktop (no terminal)
 if [[ ! -t 1 ]]; then
-    exec >> "$HOME/.local/share/bgsoft/launch.log" 2>&1
     mkdir -p "$HOME/.local/share/bgsoft"
+    exec >> "$HOME/.local/share/bgsoft/launch.log" 2>&1
 fi
 
 python "$SCRIPT_DIR/bg_soft_gui.py"
