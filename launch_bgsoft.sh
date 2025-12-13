@@ -72,10 +72,10 @@ fi
 if ! pgrep obs > /dev/null 2>&1; then
     echo "[→] Starting OBS..."
     "$SCRIPT_DIR/start_obs.sh"
-    WAIT_TIME=3  # OBS just started, quick wait to ensure WebSocket is ready
+    WAIT_TIME=10  # OBS just started, give more time for WebSocket server to initialize
 else
     echo "[✓] OBS is already running"
-    WAIT_TIME=1  # Already running, minimal wait
+    WAIT_TIME=3  # Already running, but give WebSocket server time to respond
 fi
 
 # Wait for OBS to fully initialize and WebSocket server to be ready
