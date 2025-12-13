@@ -28,7 +28,7 @@ class ConnectionSettings:
     port: int = 4455
     password: str = "obsstudio"
     scene_name: str = "BR-Render"
-    input_name: str = "Media Source 2"
+    input_name: str = "bg-soft"
     background_filter_name: str = "Background Removal"
     sharpen_filter_name: str = "Sharpen"
 
