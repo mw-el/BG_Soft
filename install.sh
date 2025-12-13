@@ -35,9 +35,9 @@ conda run -n "$ENV_NAME" python -m pip install -r "$REQ_FILE"
 
 # Desktop file installation
 echo "[INFO] Richte Desktop-Integration ein..."
-DESKTOP_TEMPLATE="$REPO_ROOT/vgsoft.desktop.template"
+DESKTOP_TEMPLATE="$REPO_ROOT/bgsoft.desktop.template"
 DESKTOP_DIR="$HOME/.local/share/applications"
-DESKTOP_FILE="$DESKTOP_DIR/vgsoft.desktop"
+DESKTOP_FILE="$DESKTOP_DIR/bgsoft.desktop"
 
 if [[ ! -f "$DESKTOP_TEMPLATE" ]]; then
   echo "[WARNING] Desktop-Template nicht gefunden: $DESKTOP_TEMPLATE"
@@ -76,6 +76,6 @@ CLI-Verwendung:
 
 GUI-Starten:
   python bg_soft_gui.py
-  oder über Desktop-Icon "VG-Soft"
+  oder über Desktop-Icon "BG-Soft"
 
 MSG

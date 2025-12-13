@@ -407,11 +407,11 @@ class MainWindow(QtWidgets.QWidget):
 
 def main() -> int:
     app = QtWidgets.QApplication(sys.argv)
-    app.setApplicationName("VG-Soft")
+    app.setApplicationName("BG-Soft")
     app.setApplicationVersion("1.0")
     app.setStyle("Fusion")
     window = MainWindow()
-    window.setWindowIcon(QtGui.QIcon(str(pathlib.Path(__file__).parent / "vgsoft.png")))
+    window.setWindowIcon(QtGui.QIcon(str(pathlib.Path(__file__).parent / "bgsoft.png")))
     window.show()
     return app.exec_()
 
