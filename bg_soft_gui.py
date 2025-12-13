@@ -495,7 +495,7 @@ def main() -> int:
 
     # Apply modern Material Design theme if available
     if HAS_QT_MATERIAL:
-        apply_stylesheet(app, theme='dark_amber.xml')
+        apply_stylesheet(app, theme='light_blue.xml')
     else:
         app.setStyle("Fusion")
 
