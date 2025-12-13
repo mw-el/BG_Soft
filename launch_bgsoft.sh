@@ -6,11 +6,17 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Initialize conda and activate BG-Soft environment
-eval "$(conda shell.bash hook)"
-conda activate BG-Soft
+# Use explicit Python from BG-Soft conda environment
+export PYTHON="$HOME/miniconda3/envs/BG-Soft/bin/python"
 
-# Ensure conda environment and ~/bin are in PATH
+# Verify conda environment exists and Python is available
+if [ ! -x "$PYTHON" ]; then
+    echo "[✗] Error: Python not found in BG-Soft conda environment"
+    echo "[✗] Expected: $PYTHON"
+    exit 1
+fi
+
+# Set PATH to use BG-Soft conda environment
 export PATH="$HOME/miniconda3/envs/BG-Soft/bin:$HOME/miniconda3/bin:$HOME/bin:$PATH"
 
 # Cleanup function to stop OBS when BG-Soft exits
@@ -83,4 +89,4 @@ if [[ ! -t 1 ]]; then
     exec >> "$HOME/.local/share/bgsoft/launch.log" 2>&1
 fi
 
-python "$SCRIPT_DIR/bg_soft_gui.py"
+"$PYTHON" "$SCRIPT_DIR/bg_soft_gui.py"
