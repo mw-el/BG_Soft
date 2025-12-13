@@ -21,17 +21,26 @@ if [[ ! -d "$HOME/.config/obs-studio/basic/profiles/Automation" ]]; then
 fi
 
 # Check if OBS is already running
-if pgrep -f "obs.*--profile.*Automation" > /dev/null 2>&1; then
-    echo "[✓] OBS Automation profile is already running"
+if pgrep obs > /dev/null 2>&1; then
+    echo "[✓] OBS is already running"
     sleep 1
 else
-    echo "[→] Launching OBS with Automation profile..."
+    echo "[→] Configuring Automation profile to use Automation scene collection..."
+
+    # Ensure the Automation profile's basic.ini has the correct scene collection
+    AUTOMATION_PROFILE_INI="$HOME/.config/obs-studio/basic/profiles/Automation/basic.ini"
+    if [[ -f "$AUTOMATION_PROFILE_INI" ]]; then
+        sed -i '/^SceneCollection=/d' "$AUTOMATION_PROFILE_INI"
+    fi
+    echo "SceneCollection=Automation" >> "$AUTOMATION_PROFILE_INI"
+
+    echo "[→] Launching OBS..."
 
     # Try native OBS first, fall back to flatpak
     if command -v obs >/dev/null 2>&1; then
-        obs --profile "Automation" --collection "Automation" > /tmp/obs.log 2>&1 &
+        obs > /tmp/obs.log 2>&1 &
     else
-        flatpak run com.obsproject.Studio --profile "Automation" --collection "Automation" > /tmp/obs.log 2>&1 &
+        flatpak run com.obsproject.Studio > /tmp/obs.log 2>&1 &
     fi
 
     OBS_PID=$!
@@ -39,8 +48,8 @@ else
     echo "[→] Waiting for OBS to start..."
     sleep 5
 
-    if pgrep -f "obs.*--profile.*Automation" > /dev/null 2>&1; then
-        echo "[✓] OBS started successfully with Automation profile"
+    if pgrep obs > /dev/null 2>&1; then
+        echo "[✓] OBS started successfully"
     else
         echo "[✗] OBS failed to start"
         cat /tmp/obs.log
@@ -50,13 +59,13 @@ fi
 
 echo
 echo "============================================"
-echo "OBS Automation Profile is running"
+echo "OBS is running"
 echo "============================================"
 echo
 echo "Configuration status:"
 echo
 echo "1. WebSocket Server"
-if grep -q "websocket_server_enabled" "$HOME/.config/obs-studio/global.conf" 2>/dev/null; then
+if grep -q "websocket_server_enabled" "$HOME/.config/obs-studio/global.ini" 2>/dev/null; then
     echo "   [✓] WebSocket Server is enabled"
 else
     echo "   [!] WebSocket Server needs to be enabled"

@@ -28,10 +28,11 @@ if [[ ! -d "$OBS_PROFILES_DIR/$AUTOMATION_PROFILE" ]]; then
   echo "[→] Creating profile: $AUTOMATION_PROFILE"
   mkdir -p "$OBS_PROFILES_DIR/$AUTOMATION_PROFILE"
 
-  # Create minimal profile config
+  # Create minimal profile config that defaults to Automation scene collection
   cat > "$OBS_PROFILES_DIR/$AUTOMATION_PROFILE/basic.ini" << 'EOF'
 [General]
 Name=Automation
+SceneCollection=Automation
 
 [Output]
 FilenameFormatting=%CCYY-%MM-%DD %hh-%mm-%ss
