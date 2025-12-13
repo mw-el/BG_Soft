@@ -8,14 +8,39 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Cleanup function to stop OBS when BG-Soft exits
 cleanup() {
+    local exit_code=$?
     echo "[→] Cleaning up OBS..."
+
     # Try graceful shutdown first
-    pkill -TERM obs 2>/dev/null || true
-    sleep 2
-    # Force kill if still running
-    pkill -9 -f "bwrap.*obs" 2>/dev/null || true
-    pkill -9 obs 2>/dev/null || true
+    if pgrep obs > /dev/null 2>&1; then
+        echo "[→] Sending graceful shutdown signal to OBS..."
+        pkill -TERM obs 2>/dev/null || true
+        sleep 2
+    fi
+
+    # Force kill any remaining OBS processes (native)
+    if pgrep obs > /dev/null 2>&1; then
+        echo "[!] OBS still running, force killing..."
+        pkill -9 obs 2>/dev/null || true
+    fi
+
+    # Force kill any remaining Flatpak OBS processes
+    if pgrep -f "bwrap.*obs" > /dev/null 2>&1; then
+        echo "[!] Flatpak OBS still running, force killing..."
+        pkill -9 -f "bwrap.*obs" 2>/dev/null || true
+    fi
+
     sleep 1
+
+    # Verify cleanup succeeded
+    if pgrep obs > /dev/null 2>&1; then
+        echo "[✗] Warning: OBS processes still running after cleanup"
+        pgrep -l obs
+    else
+        echo "[✓] OBS cleaned up successfully"
+    fi
+
+    return $exit_code
 }
 
 # Register cleanup to run on exit
