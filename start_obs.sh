@@ -3,6 +3,7 @@
 
 set -euo pipefail
 
+# Ensure ~/bin is in PATH for native obs binary
 export PATH=~/bin:$PATH
 
 echo "Starting OBS Studio with Automation profile..."
@@ -43,7 +44,7 @@ else
 
     echo "[→] OBS PID: $OBS_PID"
     echo "[→] Waiting for OBS to start..."
-    sleep 5
+    sleep 10
 
     if pgrep obs > /dev/null 2>&1; then
         echo "[✓] OBS started successfully"
@@ -52,6 +53,9 @@ else
         cat /tmp/obs.log
         exit 1
     fi
+
+    # Wait for WebSocket server to be ready (extra safety)
+    sleep 3
 fi
 
 echo
