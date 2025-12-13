@@ -1,8 +1,11 @@
 #!/bin/bash
 # Start OBS with Automation profile for BG-Soft
 
-set -euo pipefail
+set -eu pipefail
 
+# Set LD_LIBRARY_PATH for ONNX Runtime 1.21.0 GPU libraries from conda obs-build environment
+# The GPU plugin requires ONNX Runtime 1.21.0 with CUDA support
+export LD_LIBRARY_PATH="$HOME/miniconda3/envs/obs-build/lib:${LD_LIBRARY_PATH:-}"
 export PATH=~/bin:$PATH
 
 echo "Starting OBS Studio with Automation profile..."
