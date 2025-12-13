@@ -31,11 +31,16 @@ fi
 # Check if OBS is already running
 if ! pgrep obs > /dev/null 2>&1; then
     echo "[→] Starting OBS..."
-    "$SCRIPT_DIR/start_obs.sh" &
-    sleep 10  # Give OBS time to start
+    "$SCRIPT_DIR/start_obs.sh"
+    WAIT_TIME=3  # OBS just started, quick wait to ensure WebSocket is ready
 else
     echo "[✓] OBS is already running"
+    WAIT_TIME=1  # Already running, minimal wait
 fi
+
+# Wait for OBS to fully initialize and WebSocket server to be ready
+echo "[→] Waiting for OBS to be ready..."
+sleep $WAIT_TIME
 
 # Launch the GUI (without exec to allow trap to trigger)
 echo "[→] Launching BG-Soft GUI..."
