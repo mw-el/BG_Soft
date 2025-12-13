@@ -1,106 +1,245 @@
-# Automatisierung BG-Soften mit OBS
+# BG-Soft: OBS Background Removal Automation
 
-Dieses Mini-Tool verbindet sich per OBS-WebSocket, trägt die gewünschte Datei in
-eine vorbereitete Media-Source ein, startet die Aufnahme und stoppt sie
-automatisch, sobald der Clip durchgelaufen ist.
+Automatisierung BG-Soften mit OBS - A Python tool that automates video background removal using OBS Studio with the Background Removal plugin.
 
-## 1. OBS vorbereiten (einmalig)
+## Features
 
-### Schritt 1: Automation-Profil erstellen (EMPFOHLEN - verhindert Missing Files Dialog)
+- **Automated Recording**: Automatically starts/stops recording when video playback ends
+- **Batch Processing**: Process multiple videos in a single session
+- **GUI Interface**: User-friendly PyQt5 interface for easy configuration
+- **Filter Control**: Adjust background removal and sharpening parameters
+- **Smart Cleanup**: Automatically cleans up media sources between renders
+- **Desktop Integration**: Launch via desktop icon for quick access
 
-```bash
-./setup_obs_automation.sh
-```
+## Quick Start
 
-Dieses Skript erstellt ein dediziertes "Automation"-Profil und eine "Automation"-Szene ohne alte Dateireferenzen.
+### 1. Prerequisites
 
-**Danach OBS mit diesem Befehl starten:**
-```bash
-obs --profile "Automation" --collection "Automation"
-```
+- Linux system with OBS Studio (Flatpak or native)
+- Python 3.11+
+- Conda/Miniconda installed
 
-### Schritt 2: OBS konfigurieren
-
-1. **WebSocket Server aktivieren**
-   - OBS → `Tools → WebSocket Server Settings`
-   - Server aktivieren, Port (Standard `4455`) merken und ein Passwort setzen
-
-2. **Szene konfigurieren**
-   - Öffne die Szene `BR-Render`
-   - Wähle die Media-Source `Media Source 2` aus
-   - In den Properties: Richte deinen Background-Removal-Filter ein
-   - Speichere die Konfiguration
-
-**Wichtig:** Während der Automatisierung muss OBS laufen und darf selbst nichts anderes
-aufnehmen oder streamen.
-
-## 2. Python-Abhängigkeiten
+### 2. Installation
 
 ```bash
-pip install -r requirements.txt
+cd /path/to/BG_Soft
+./install.sh
 ```
 
-(Standardmäßig verbindet sich das Skript zu `localhost:4455` mit dem Passwort
-`obsstudio`. Passe dies im Aufruf an, wenn du etwas anderes verwendest.)
+The installer will:
+- Create a `BG-Soft` conda environment
+- Install all Python dependencies (obsws-python, PyQt5)
+- Set up the OBS Automation profile and scene collection
+- Configure the desktop launcher
 
-## 3. Skript verwenden
+### 3. Initial OBS Setup (One-time)
+
+After installation, start OBS with the Automation profile:
 
 ```bash
-python render_with_obs.py /pfad/zur/datei.mp4
+./start_obs.sh
 ```
 
-Optionale Flags:
+Then:
+1. Go to **Tools → WebSocket Server Settings**
+2. Enable the WebSocket Server
+3. Set port to `4455` (default)
+4. Set password to `obsstudio` (default, changeable in GUI)
 
-- `--host/--port/--password` – Verbindung zur OBS-WebSocket-Instanz
-- `--scene` – Szenenname (Default `BR-Render`)
-- `--input` – Name der Media-Source in dieser Szene (Default `Media Source 2`)
-- `--poll` – Intervall in Sekunden für Statusabfragen (Default `0.5`)
+### 4. Configure Filters (One-time)
 
-## 4. PyQt5-GUI
+In OBS:
+1. Select the `BR-Render` scene
+2. Select the `bg-soft` media source
+3. Add or configure your background removal filters:
+   - **Background Removal** - Main filter (required)
+   - **Sharpen** - Optional, for detail enhancement
 
-Für eine komfortable Bedienung steht `bg_soft_gui.py` bereit:
+## Usage
+
+### Desktop Launcher
 
 ```bash
-python bg_soft_gui.py
+# Click the "BG-Soft" icon in your applications menu
+# Or run:
+./launch_bgsoft.sh
 ```
 
-Die GUI ermöglicht:
+The GUI will:
+- Automatically start OBS if needed
+- Launch the user interface
+- Ready to process videos
 
-- Bearbeiten der OBS-Verbindung (Host, Port, Szene, Media-Source, Filter-Namen)
-- Einstellen aller relevanten Background-Removal-Parameter sowie der Sharpen-Stärke
-- Auswahl mehrerer Videodateien und Batch-Verarbeitung; Statusanzeige für jedes File
-- Automatisches Öffnen der erzeugten Ausgabe im Standard-Videoplayer
+### GUI Interface
 
-OBS muss wie beim CLI-Skript vorab laufen und die Szene `BR-Render` mit den Filtern
-enthalten.
+1. **Connection Settings**
+   - Host: `localhost` (default)
+   - Port: `4455` (default)
+   - Password: `obsstudio` (default)
+   - Scene: `BR-Render` (default)
+   - Media Source: `bg-soft` (default)
 
-## 5. Ergebnisdatei
+2. **Background Removal Settings**
+   - Segmentation model selection (SINet recommended)
+   - Threshold, contour, and silhouette smoothing
+   - Mask expansion and temporal smoothing
+   - Focal blur configuration
 
-OBS speichert die Aufnahme wie gewohnt (z. B. in deinem Standardaufnahmeordner).
-Das Skript wartet auf den fertig gerenderten Clip, verschiebt ihn anschließend
-zum Eingabeverzeichnis und benennt ihn nach dem Schema:
+3. **Sharpening Settings**
+   - Adjustable sharpness factor (default: 10.0)
 
-```
-<original_stem>_soft_<YYYYmmdd-HHMMSS><obs_extension>
-```
+4. **Batch Processing**
+   - Add multiple video files
+   - Set common filter parameters
+   - Process all files with one click
+   - Monitor progress in real-time
 
-Beispiel: `video.mp4 → video_soft_20231212-150501.mkv`
-
-## 6. Troubleshooting
-
-### "Missing Files" Dialog beim Start (GELÖST durch setup_obs_automation.sh)
-
-Wenn trotzdem eine "Missing Files"-Dialog anzeigt wird:
+### CLI Usage
 
 ```bash
-./cleanup_obs_config.sh
+conda activate BG-Soft
+python render_with_obs.py /path/to/video.mp4
 ```
 
-Dieses Skript entfernt alle fehlenden Dateipfade aus der OBS-Konfiguration. Danach OBS neu starten.
+Optional flags:
+```bash
+--host localhost          # OBS WebSocket host
+--port 4455              # OBS WebSocket port
+--password obsstudio     # OBS WebSocket password
+--scene BR-Render        # Scene name in OBS
+--input bg-soft          # Media source name
+--poll 0.5               # Status polling interval (seconds)
+```
 
-### Weitere Probleme
+## Output Files
 
-- Wenn OBS noch aufnimmt, bricht das Skript ab, damit nichts überschrieben wird.
-- Bei `OBS_MEDIA_STATE_ERROR` beendet das Skript ebenfalls mit Fehlermeldung.
-- Stelle sicher, dass die Szene + Media-Source exakt so heißen wie im Skript
-  bzw. wie du sie per Flags übergibst.
+Processed videos are saved with the pattern:
+```
+<original_name>_soft_<YYYYMMDD-HHMMSS>.<original_extension>
+```
+
+Example: `video.mp4` → `video_soft_20231213-103015.mkv`
+
+Output location: Same directory as input file
+
+## Configuration Files
+
+### Environment
+- `environment.yml` - Conda environment specification
+- `requirements.txt` - Python dependencies
+
+### OBS Setup
+- `setup_obs_automation.sh` - Creates clean Automation profile/scene
+- `bgsoft.desktop.template` - Desktop launcher template
+- `cleanup_obs_config.sh` - Utility to clean old OBS references
+
+### Application
+- `bg_soft_gui.py` - PyQt5 GUI application
+- `obs_controller.py` - OBS WebSocket API wrapper
+- `render_with_obs.py` - CLI rendering script
+- `launch_bgsoft.sh` - Desktop launcher script
+- `start_obs.sh` - OBS startup helper
+- `dummy.mp4` - Placeholder video for media source cleanup
+
+## Default Filter Settings
+
+### Background Removal
+- **Model**: SINet (better quality than Selfie Segmentation)
+- **Threshold**: 0.65 (enabled)
+- **Contour Filter**: 1.0
+- **Smooth Silhouette**: 0.05
+- **Mask Expansion**: -5 (tighter mask)
+- **Temporal Smooth Factor**: 0.5
+- **Focal Blur**: Enabled
+  - Focus Point: 0.05
+  - Focus Depth: 0.16
+
+### Sharpening
+- **Sharpness**: 10.0 (strong, can be adjusted in GUI)
+
+These defaults are optimized for high-quality background removal with proper edge definition and visual clarity.
+
+## Troubleshooting
+
+### OBS won't start
+- Ensure OBS is closed completely before running `start_obs.sh`
+- Check if port 4455 is already in use: `lsof -i :4455`
+
+### Media file not loading
+- Verify the media source name matches exactly (usually `bg-soft`)
+- Check WebSocket connection is enabled in OBS
+- Look at GUI output for detailed error messages
+
+### No GPU support (for CUDA acceleration)
+- Currently using Flatpak OBS, which is CPU-only
+- See **GPU Acceleration** section below for native build instructions
+
+## GPU Acceleration (Advanced)
+
+The default Flatpak OBS installation uses CPU-only inference. For GPU acceleration with NVIDIA GPUs:
+
+**See GPU_ACCELERATION.md for detailed setup instructions.**
+
+Quick summary:
+1. Install CUDA 12 + cuDNN 9 runtime
+2. Build obs-backgroundremoval from source with CUDA support
+3. Install as system package (not Flatpak)
+4. Configure OBS to use native installation
+
+## System Requirements
+
+- **Minimum**: CPU inference (any Linux system with OBS)
+- **Recommended**: NVIDIA GPU (RTX 30-series or newer)
+- **RAM**: 4GB minimum, 8GB+ recommended
+- **Storage**: ~2GB for conda environment
+
+## File Structure
+
+```
+BG_Soft/
+├── README.md                      # This file
+├── GPU_ACCELERATION.md            # GPU setup guide
+├── environment.yml                # Conda environment
+├── requirements.txt               # Python dependencies
+│
+├── bg_soft_gui.py                 # Main GUI application
+├── obs_controller.py              # OBS WebSocket API
+├── render_with_obs.py             # CLI script
+│
+├── launch_bgsoft.sh               # Desktop launcher
+├── start_obs.sh                   # OBS startup helper
+├── install.sh                     # Installation script
+│
+├── setup_obs_automation.sh        # OBS profile setup
+├── cleanup_obs_config.sh          # Config cleanup utility
+│
+├── bgsoft.desktop.template        # Desktop file template
+├── bgsoft.png                     # Application icon
+├── dummy.mp4                      # Placeholder video
+│
+└── .gitignore                     # Git ignore rules
+```
+
+## License
+
+This project integrates with OBS Studio and the obs-backgroundremoval plugin.
+
+## Development
+
+### Making Changes
+
+1. Update code in the repo
+2. Test with: `python bg_soft_gui.py`
+3. Commit changes: `git commit -m "Description"`
+4. Push: `git push origin main`
+
+### Building from Source
+
+See GPU_ACCELERATION.md for native build instructions.
+
+## Support
+
+For issues with:
+- **BG-Soft**: Check the GitHub issues
+- **OBS Studio**: https://obsproject.com/
+- **Background Removal Plugin**: https://github.com/royshil/obs-backgroundremoval
