@@ -23,8 +23,8 @@ if [[ ! -d "$HOME/.config/obs-studio/basic/profiles/Automation" ]]; then
     exit 1
 fi
 
-# Check if OBS is already running (check for both Flatpak and native OBS, exclude zombies)
-if ps aux | grep -v grep | awk '/obs|bwrap/{if($8 !~ /Z/) print}' | grep -q . ; then
+# Check if OBS is already running (exclude zombies)
+if ps aux | grep -v grep | grep /usr/bin/obs | grep -v "Z" > /dev/null 2>&1; then
     echo "[✓] OBS is already running"
     sleep 1
 else
@@ -37,12 +37,12 @@ else
     fi
     echo "SceneCollection=Automation" >> "$AUTOMATION_PROFILE_INI"
 
-    echo "[→] Launching OBS Studio (Flatpak) in background..."
+    echo "[→] Launching OBS Studio in background..."
 
     # Start OBS in background with Automation profile, hide the window
     (
-        sleep 2  # Give flatpak time to initialize
-        flatpak run com.obsproject.Studio --profile "Automation" > /tmp/obs.log 2>&1
+        sleep 2  # Give OBS time to initialize
+        /usr/bin/obs --profile "Automation" > /tmp/obs.log 2>&1
     ) &
 
     OBS_PID=$!
@@ -50,7 +50,7 @@ else
     echo "[→] Waiting for OBS to start..."
     sleep 10
 
-    if pgrep -f "bwrap.*obs" > /dev/null 2>&1 || (pgrep obs > /dev/null 2>&1 && ps aux | grep -v grep | grep obs | grep -v "Z" > /dev/null); then
+    if ps aux | grep -v grep | grep /usr/bin/obs | grep -v "Z" > /dev/null 2>&1; then
         echo "[✓] OBS started successfully"
 
         # Minimize OBS window to run invisibly in the background
