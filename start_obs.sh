@@ -23,8 +23,8 @@ if [[ ! -d "$HOME/.config/obs-studio/basic/profiles/Automation" ]]; then
     exit 1
 fi
 
-# Check if OBS is already running
-if pgrep obs > /dev/null 2>&1; then
+# Check if OBS is already running (check for Flatpak OBS specifically)
+if pgrep -f "obsproject.Studio" > /dev/null 2>&1; then
     echo "[✓] OBS is already running"
     sleep 1
 else
@@ -37,17 +37,35 @@ else
     fi
     echo "SceneCollection=Automation" >> "$AUTOMATION_PROFILE_INI"
 
-    echo "[→] Launching native OBS Studio..."
+    echo "[→] Launching OBS Studio (Flatpak) in background..."
 
-    obs > /tmp/obs.log 2>&1 &
+    # Start OBS in background, hide the window
+    (
+        sleep 2  # Give flatpak time to initialize
+        flatpak run com.obsproject.Studio > /tmp/obs.log 2>&1
+    ) &
 
     OBS_PID=$!
     echo "[→] OBS PID: $OBS_PID"
     echo "[→] Waiting for OBS to start..."
-    sleep 5
+    sleep 10
 
-    if pgrep obs > /dev/null 2>&1; then
+    if pgrep -f "obsproject.Studio" > /dev/null 2>&1; then
         echo "[✓] OBS started successfully"
+
+        # Minimize OBS window to run invisibly in the background
+        echo "[→] Minimizing OBS window..."
+        (
+            sleep 2
+            # Find OBS window and minimize it
+            if command -v xdotool >/dev/null 2>&1; then
+                # Search for OBS window by name
+                window_id=$(xdotool search --name "OBS Studio" 2>/dev/null | head -1)
+                if [[ -n "$window_id" ]]; then
+                    xdotool windowminimize "$window_id" 2>/dev/null || true
+                fi
+            fi
+        ) &
     else
         echo "[✗] OBS failed to start"
         cat /tmp/obs.log

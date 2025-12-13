@@ -8,10 +8,12 @@ OBS_CONFIG_DIR="$HOME/.config/obs-studio"
 OBS_PROFILES_DIR="$OBS_CONFIG_DIR/basic/profiles"
 OBS_SCENES_DIR="$OBS_CONFIG_DIR/basic/scenes"
 
-# Validate OBS is installed
-if ! command -v obs >/dev/null 2>&1; then
-  echo "[!] OBS Studio is not installed or not in PATH"
-  exit 1
+# Validate OBS is installed (check for Flatpak or native binary)
+if ! command -v flatpak >/dev/null 2>&1 || ! flatpak list --app 2>/dev/null | grep -q "com.obsproject.Studio"; then
+  if ! command -v obs >/dev/null 2>&1; then
+    echo "[!] OBS Studio is not installed (neither Flatpak nor native binary found)"
+    exit 1
+  fi
 fi
 
 # Create necessary directories
