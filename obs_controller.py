@@ -453,22 +453,32 @@ class ObsRenderer:
         scenes_response = self.client.get_scene_list()
         scene_names = [scene.get("sceneName") for scene in getattr(scenes_response, "scenes", [])]
         if self.conn.scene_name not in scene_names:
-            raise RenderError(
-                "OBS-Szene '{scene}' wurde nicht gefunden. Verfügbare Szenen: {available}".format(
-                    scene=self.conn.scene_name,
-                    available=", ".join(scene_names) if scene_names else "<keine Szenen gefunden>",
-                )
-            )
+            print(f"[!] Scene '{self.conn.scene_name}' not found. Creating it...")
+            try:
+                self.client.create_scene(self.conn.scene_name)
+                print(f"[✓] Scene '{self.conn.scene_name}' created")
+            except Exception as e:
+                raise RenderError(
+                    f"Could not create scene '{self.conn.scene_name}': {e}"
+                ) from e
 
         inputs_response = self.client.get_input_list()
         input_names = [item.get("inputName") for item in getattr(inputs_response, "inputs", [])]
         if self.conn.input_name not in input_names:
-            raise RenderError(
-                "Media-Source '{source}' existiert nicht. Verfügbare Inputs: {available}".format(
-                    source=self.conn.input_name,
-                    available=", ".join(input_names) if input_names else "<keine Inputs gefunden>",
+            print(f"[!] Media input '{self.conn.input_name}' not found. Creating it in scene '{self.conn.scene_name}'...")
+            try:
+                self.client.create_input(
+                    sceneName=self.conn.scene_name,
+                    inputName=self.conn.input_name,
+                    inputKind="ffmpeg_source",
+                    inputSettings={"local_file": ""},
+                    sceneItemEnabled=True,
                 )
-            )
+                print(f"[✓] Media input '{self.conn.input_name}' created")
+            except Exception as e:
+                raise RenderError(
+                    f"Could not create media input '{self.conn.input_name}': {e}"
+                ) from e
 
         # Note: We no longer require filters to exist beforehand.
         # They will be created automatically when apply_filter_settings() is called.
