@@ -34,10 +34,10 @@ else
     fi
     echo "SceneCollection=Automation" >> "$AUTOMATION_PROFILE_INI"
 
-    echo "[→] Launching OBS via Flatpak..."
+    echo "[→] Launching OBS with GPU acceleration support..."
 
     # Launch OBS and disown it so it doesn't become a zombie when start_obs.sh exits
-    flatpak run com.obsproject.Studio > /tmp/obs.log 2>&1 &
+    obs > /tmp/obs.log 2>&1 &
     OBS_PID=$!
     disown $OBS_PID
 
