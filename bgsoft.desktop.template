@@ -7,6 +7,6 @@ Icon=${APP_DIR}/bgsoft.png
 Exec=${CONDA_PREFIX}/bin/python ${APP_DIR}/bg_soft_gui.py
 Path=${APP_DIR}
 Terminal=false
-Categories=Utility;Video;
+Categories=AudioVideo;Utility;
 StartupNotify=true
 StartupWMClass=bgsoft
