@@ -836,8 +836,8 @@ def render_local(
                 yield comp
                 frame_counter += 1
 
-                # Write progress every 5 frames so monitoring can track progress
-                if frame_counter % 5 == 0:
+                # Write progress every 50 frames so monitoring can track progress
+                if frame_counter % 50 == 0:
                     log_file.write(f"Frames processed: {frame_counter}\n")
                     log_file.flush()
 
