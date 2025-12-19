@@ -562,89 +562,42 @@ def encode_video(
         raise RuntimeError("ffmpeg stdin not available")
 
     written_frames = 0
-    broken_pipe_error = None
     try:
         for frame in frames:
-            try:
-                proc.stdin.write(frame.tobytes())
-                written_frames += 1
-
-                # Log progress for longer videos
-                if written_frames % 100 == 0:
-                    if log_stream:
-                        log_stream.write(f"Encoder progress: {written_frames} frames written\n")
-                        log_stream.flush()
-
-                # Check if FFmpeg process is still alive
-                if proc.poll() is not None:
-                    # Process exited, capture return code
-                    retcode = proc.returncode
-                    if log_stream:
-                        log_stream.write(f"FFmpeg encoder process exited prematurely with code {retcode} after {written_frames} frames\n")
-                        log_stream.flush()
-                    broken_pipe_error = RuntimeError(f"FFmpeg encoder exited with code {retcode} after writing {written_frames} frames")
-                    break
-
-            except BrokenPipeError as e:
+            proc.stdin.write(frame.tobytes())
+            written_frames += 1
+            if written_frames % 100 == 0:
                 if log_stream:
-                    log_stream.write(f"Encode stdin broken pipe after {written_frames} frames: {e}\n")
-                    log_stream.write(f"FFmpeg process returncode: {proc.poll()}\n")
+                    log_stream.write(f"Frames written: {written_frames}\n")
                     log_stream.flush()
-                broken_pipe_error = e
-                break
-            except (OSError, IOError) as e:
-                if log_stream:
-                    log_stream.write(f"IO error writing to FFmpeg stdin after {written_frames} frames: {e}\n")
-                    log_stream.flush()
-                broken_pipe_error = e
-                break
+    except BrokenPipeError:
+        if log_stream:
+            log_stream.write(f"Broken pipe after {written_frames} frames (FFmpeg process exited)\n")
+            log_stream.flush()
+        raise RuntimeError(f"FFmpeg encoder exited unexpectedly after {written_frames} frames")
+    except (OSError, IOError) as e:
+        if log_stream:
+            log_stream.write(f"IO error after {written_frames} frames: {e}\n")
+            log_stream.flush()
+        raise
     finally:
-        # Close stdin to signal EOF to FFmpeg
-        try:
-            proc.stdin.close()
-        except Exception as e:
-            if log_stream:
-                log_stream.write(f"Error closing FFmpeg stdin: {e}\n")
-                log_stream.flush()
-
-        # Wait for process to complete with timeout
+        proc.stdin.close()
         try:
             proc.wait(timeout=30)
         except subprocess.TimeoutExpired:
             if log_stream:
-                log_stream.write(f"FFmpeg encoder timeout after {written_frames} frames - killing process\n")
+                log_stream.write(f"FFmpeg timeout after {written_frames} frames - killing\n")
                 log_stream.flush()
-            try:
-                proc.kill()
-                proc.wait(timeout=5)
-            except Exception:
-                pass
-
-        # Report final status
-        if log_stream:
-            log_stream.write(f"FFmpeg encoder completed: returncode={proc.returncode}, frames_written={written_frames}\n")
-            log_stream.flush()
-
-        # Handle errors
-        if broken_pipe_error:
-            raise RuntimeError(f"Broken pipe error after writing {written_frames} frames: {broken_pipe_error}")
+            proc.kill()
+            proc.wait()
 
         if proc.returncode != 0:
-            msg = f"ffmpeg video encode failed with code {proc.returncode} (frames written: {written_frames})"
-            if log_stream:
-                log_stream.write(msg + "\n")
-                log_stream.flush()
-            raise RuntimeError(msg)
-
+            raise RuntimeError(f"ffmpeg encode failed with code {proc.returncode} ({written_frames} frames)")
         if written_frames == 0:
-            raise RuntimeError("ffmpeg video encode received 0 frames")
+            raise RuntimeError("ffmpeg encode produced 0 frames")
 
     # Step 2: mux audio if available
     if audio_source:
-        if log_stream:
-            log_stream.write(f"Starting audio mux: {audio_source}\n")
-            log_stream.flush()
-
         mux_report = _build_ffmpeg_report_path(report_base, "mux")
         mux_report.parent.mkdir(parents=True, exist_ok=True)
         mux_env = _ffmpeg_env(mux_report, loglevel)
@@ -672,20 +625,10 @@ def encode_video(
             "copy",
             "-shortest",
         ]
-        # Add metadata to mux command as well
         if metadata:
             for key, value in metadata.items():
                 cmd_mux.extend(["-metadata", f"{key}={value}"])
-        cmd_mux += [
-            "-y",
-            str(out_path),
-        ]
-        if log_stream:
-            try:
-                log_stream.write("FFmpeg mux cmd: " + " ".join(cmd_mux) + "\n")
-                log_stream.flush()
-            except Exception:
-                pass
+        cmd_mux += ["-y", str(out_path)]
 
         try:
             mux_proc = subprocess.run(
@@ -693,56 +636,16 @@ def encode_video(
                 stdout=log_stream or subprocess.DEVNULL,
                 stderr=log_stream or subprocess.DEVNULL,
                 env=mux_env,
-                timeout=300,  # 5 minute timeout for mux
+                timeout=300,
             )
             if mux_proc.returncode != 0:
-                msg = f"ffmpeg mux failed with code {mux_proc.returncode}"
-                if log_stream:
-                    log_stream.write(msg + "\n")
-                    log_stream.flush()
-                raise RuntimeError(msg)
-            if log_stream:
-                log_stream.write(f"Audio mux completed successfully\n")
-                log_stream.flush()
+                raise RuntimeError(f"ffmpeg mux failed with code {mux_proc.returncode}")
         except subprocess.TimeoutExpired:
-            msg = "ffmpeg mux timeout (>5 min) - killed process"
-            if log_stream:
-                log_stream.write(msg + "\n")
-                log_stream.flush()
-            raise RuntimeError(msg)
-        except Exception as e:
-            msg = f"ffmpeg mux unexpected error: {e}"
-            if log_stream:
-                log_stream.write(msg + "\n")
-                log_stream.flush()
-            raise RuntimeError(msg)
+            raise RuntimeError("ffmpeg mux timeout (>5 min)")
 
-        # Cleanup temp video file
-        try:
-            tmp_video.unlink()
-            if log_stream:
-                log_stream.write(f"Cleaned up temp video file\n")
-                log_stream.flush()
-        except Exception as e:
-            if log_stream:
-                log_stream.write(f"Warning: Could not delete temp file {tmp_video}: {e}\n")
-                log_stream.flush()
+        tmp_video.unlink()
     else:
-        # No audio, move video-only to final path
-        if log_stream:
-            log_stream.write(f"No audio source - moving video to final path\n")
-            log_stream.flush()
-        try:
-            tmp_video.replace(out_path)
-            if log_stream:
-                log_stream.write(f"Video file moved to final path\n")
-                log_stream.flush()
-        except Exception as e:
-            msg = f"Failed to move video file: {e}"
-            if log_stream:
-                log_stream.write(msg + "\n")
-                log_stream.flush()
-            raise RuntimeError(msg)
+        tmp_video.replace(out_path)
 
 
 def render_preview_frame(
@@ -968,8 +871,8 @@ def _render_local_impl(
 
         def frame_iter():
             nonlocal frame_counter
-            try:
-                frame_src = iter_frames(
+            for idx, frame in enumerate(
+                iter_frames(
                     input_video,
                     target_w,
                     target_h,
@@ -977,66 +880,48 @@ def _render_local_impl(
                     threads=threads,
                     use_hwaccel=False,
                 )
-                for idx, frame in enumerate(frame_src):
+            ):
+                mask_raw = run_selfie_mask(session, frame, log_stream=log_file if idx < debug_frames else None)
+                mask = apply_mask_filters(
+                    mask_raw,
+                    threshold=threshold,
+                    smooth_contour=smooth_contour,
+                    mask_expansion=mask_expansion,
+                    feather=feather,
+                )
+                comp = composite(frame, mask, blur_background=blur_background)
+                if idx < debug_frames:
                     try:
-                        mask_raw = run_selfie_mask(session, frame, log_stream=log_file if idx < debug_frames else None)
-                        mask = apply_mask_filters(
-                            mask_raw,
-                            threshold=threshold,
-                            smooth_contour=smooth_contour,
-                            mask_expansion=mask_expansion,
-                            feather=feather,
+                        import numpy as _np
+
+                        md = float(_np.abs(frame.astype(_np.int16) - comp.astype(_np.int16)).mean())
+                        log_file.write(
+                            f"Debug frame {idx}: mask mean={float(_np.mean(mask)):.4f}, "
+                            f"alpha<0.5={float(_np.mean(mask < 0.5)):.4f}, mean_abs_delta={md:.4f}\n"
                         )
-                        comp = composite(frame, mask, blur_background=blur_background)
-                        if idx < debug_frames:
-                            try:
-                                import numpy as _np
-
-                                md = float(_np.abs(frame.astype(_np.int16) - comp.astype(_np.int16)).mean())
-                                log_file.write(
-                                    f"Debug frame {idx}: mask mean={float(_np.mean(mask)):.4f}, "
-                                    f"alpha<0.5={float(_np.mean(mask < 0.5)):.4f}, mean_abs_delta={md:.4f}\n"
-                                )
-                                log_file.flush()
-                                if dump_debug:
-                                    from PIL import Image as _Image
-                                    import time as _time
-
-                                    stamp = int(_time.time())
-                                    base = input_video.parent / f"{input_video.stem}_debug_{stamp}_{idx}"
-                                    _Image.fromarray(frame, mode="RGB").save(base.with_suffix(".in.png"))
-                                    _Image.fromarray((mask * 255.0).clip(0, 255).astype("uint8"), mode="L").save(
-                                        base.with_suffix(".mask.png")
-                                    )
-                                    _Image.fromarray(comp, mode="RGB").save(base.with_suffix(".out.png"))
-                            except Exception:
-                                pass
-                        yield comp
-                        frame_counter += 1
-
-                        if frame_counter % 50 == 0:
-                            log_file.write(f"Frames processed: {frame_counter}\n")
-                            log_file.flush()
-
-                        if max_frames and frame_counter >= max_frames:
-                            log_file.write(f"Reached max_frames limit ({max_frames})\n")
-                            log_file.flush()
-                            break
-                    except Exception as e:
-                        log_file.write(f"Error processing frame {idx}: {e}\n")
                         log_file.flush()
-                        raise
+                        if dump_debug:
+                            from PIL import Image as _Image
+                            import time as _time
 
-                log_file.write(f"Frame iteration complete: {frame_counter} total frames\n")
-                log_file.flush()
-            except GeneratorExit:
-                log_file.write(f"Frame generator closed by consumer (received {frame_counter} frames)\n")
-                log_file.flush()
-                raise
-            except Exception as e:
-                log_file.write(f"Frame iteration failed: {e}\n")
-                log_file.flush()
-                raise
+                            stamp = int(_time.time())
+                            base = input_video.parent / f"{input_video.stem}_debug_{stamp}_{idx}"
+                            _Image.fromarray(frame, mode="RGB").save(base.with_suffix(".in.png"))
+                            _Image.fromarray((mask * 255.0).clip(0, 255).astype("uint8"), mode="L").save(
+                                base.with_suffix(".mask.png")
+                            )
+                            _Image.fromarray(comp, mode="RGB").save(base.with_suffix(".out.png"))
+                    except Exception:
+                        pass
+                yield comp
+                frame_counter += 1
+                if frame_counter % 50 == 0:
+                    log_file.write(f"Frames processed: {frame_counter}\n")
+                    log_file.flush()
+                if max_frames and frame_counter >= max_frames:
+                    break
+            log_file.write(f"Frames processed: {frame_counter}\n")
+            log_file.flush()
 
         metadata = _build_metadata_dict(
             model_path=model_path,
