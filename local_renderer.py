@@ -345,8 +345,22 @@ def run_selfie_mask(session: ort.InferenceSession, frame: np.ndarray, log_stream
 
     if mask_small.ndim == 3 and mask_small.shape[-1] == 1:
         mask_small = mask_small[..., 0]
+
+    # Aggressive squeeze for models that output unusual shapes
+    while mask_small.ndim > 2:
+        if mask_small.shape[0] == 1:
+            mask_small = mask_small[0]
+        elif mask_small.shape[-1] == 1:
+            mask_small = mask_small[..., 0]
+        else:
+            break
+
     if mask_small.ndim != 2:
-        raise RuntimeError(f"Unsupported mask shape after postprocess: {tuple(mask_small.shape)}")
+        msg = f"Unsupported mask shape after postprocess: {tuple(mask_small.shape)}. Expected 2D array."
+        if log_stream:
+            log_stream.write(f"ERROR: {msg}\n")
+            log_stream.flush()
+        raise RuntimeError(msg)
 
     # Convert logits / 0-255 masks if necessary.
     if mask_small.min() < 0.0 or mask_small.max() > 1.0:
