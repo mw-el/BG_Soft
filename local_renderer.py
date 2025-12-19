@@ -442,7 +442,7 @@ def _build_ffmpeg_report_path(base_path: Path, stage: str) -> Path:
 
 def _ffmpeg_env(report_path: Path) -> dict:
     env = os.environ.copy()
-    env["FFREPORT"] = f"file={report_path}:level=verbose"
+    env["FFREPORT"] = f"file={report_path}:level=32"
     return env
 
 
