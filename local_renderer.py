@@ -121,9 +121,10 @@ def iter_frames(
     if use_hwaccel:
         cmd += [
             "-vf",
-            # GPU scaling and format conversion via scale_npp (NVIDIA Performance Primitives).
-            # Handles both scaling and NV12→RGB24 conversion entirely on GPU.
-            f"scale_npp=w={target_width}:h={target_height}:format=rgb24",
+            # GPU scaling with format conversion via scale_cuda, then download to CPU.
+            # scale_cuda supports RGB format output, then hwdownload transfers to system RAM.
+            # This avoids the invalid format error with hwdownload alone.
+            f"scale_cuda=w={target_width}:h={target_height}:format=rgb24,hwdownload",
         ]
     else:
         cmd += [
