@@ -105,32 +105,17 @@ def iter_frames(
         use_hwaccel = False
 
     cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error"]
-    if use_hwaccel:
-        cmd += [
-            "-hwaccel",
-            "cuda",
-            "-hwaccel_output_format",
-            "cuda",
-        ]
     cmd += [
         "-i",
         str(path),
         "-threads",
         str(max(1, threads)),
     ]
-    if use_hwaccel:
-        cmd += [
-            "-vf",
-            # GPU scaling with format conversion via scale_cuda, then download to CPU.
-            # scale_cuda supports RGB format output, then hwdownload transfers to system RAM.
-            # This avoids the invalid format error with hwdownload alone.
-            f"scale_cuda=w={target_width}:h={target_height}:format=rgb24,hwdownload",
-        ]
-    else:
-        cmd += [
-            "-vf",
-            f"scale={target_width}:{target_height}",
-        ]
+    # CPU-only decoding with scaling - simple, reliable, guaranteed to work
+    cmd += [
+        "-vf",
+        f"scale={target_width}:{target_height}",
+    ]
     cmd += [
         "-f",
         "rawvideo",
@@ -664,7 +649,7 @@ def render_preview_frame(
                     probe.height,
                     log_stream=None,
                     threads=2,
-                    use_hwaccel=True,
+                    use_hwaccel=False,
                 )
             ):
                 if idx == frame_index:
@@ -798,7 +783,7 @@ def render_local(
                 target_h,
                 log_stream=log_file,
                 threads=8,
-                use_hwaccel=True,
+                use_hwaccel=False,
             )
             ):
                 mask_raw = run_selfie_mask(session, frame, log_stream=log_file if idx < debug_frames else None)
