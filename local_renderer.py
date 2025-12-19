@@ -715,6 +715,7 @@ def render_local(
     settings_path: Optional[Path] = None,
     max_frames: Optional[int] = None,
     extra_rotation_ccw: int = 0,
+    threads: int = 8,
     background_settings: Optional[object] = None,
 ) -> None:
     """Render a video locally using selfie segmentation and black background."""
@@ -782,7 +783,7 @@ def render_local(
                 target_w,
                 target_h,
                 log_stream=log_file,
-                threads=8,
+                threads=threads,
                 use_hwaccel=False,
             )
             ):
@@ -854,7 +855,7 @@ def render_local(
                 audio_source=input_video,
                 rotate_deg=rotate_out,
                 log_stream=log_file,
-                threads=8,
+                threads=threads,
                 use_hwaccel=True,
                 metadata=metadata,
             )

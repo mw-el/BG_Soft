@@ -233,6 +233,7 @@ class LocalRenderOptions:
     model_path: pathlib.Path = pathlib.Path("models/selfie_segmentation.onnx")
     settings_path: pathlib.Path = pathlib.Path("settings.json")
     extra_rotation_ccw: int = 0
+    threads: int = 8  # FFmpeg decode threads
     # Blur and background removal settings
     blur_background: int = 6
     mask_expansion: int = -2
@@ -255,10 +256,14 @@ class LocalRenderOptions:
 
 def _build_local_settings_from_file() -> LocalRenderOptions:
     """Load LocalRenderOptions including blur settings from settings.json."""
+    import os
     settings = load_settings()
     local_cfg = settings.get("local_render", {})
     blur_cfg = settings.get("background_removal", {})
     defaults = LocalRenderOptions()
+
+    # Default threads to system CPU count
+    default_threads = os.cpu_count() or 8
 
     return LocalRenderOptions(
         enabled=local_cfg.get("enabled", defaults.enabled),
@@ -266,6 +271,7 @@ def _build_local_settings_from_file() -> LocalRenderOptions:
         model_path=pathlib.Path(local_cfg.get("model_path", defaults.model_path)),
         settings_path=pathlib.Path(local_cfg.get("settings_path", defaults.settings_path)),
         extra_rotation_ccw=int(local_cfg.get("extra_rotation_ccw", defaults.extra_rotation_ccw)),
+        threads=int(local_cfg.get("threads", default_threads)),
         blur_background=blur_cfg.get("blur_background", defaults.blur_background),
         mask_expansion=blur_cfg.get("mask_expansion", defaults.mask_expansion),
         feather=blur_cfg.get("feather", defaults.feather),
@@ -294,6 +300,25 @@ class LocalSettingsWidget(QtWidgets.QGroupBox):
         if defaults:
             idx_rot = max(0, self.rotation.findData(defaults.extra_rotation_ccw))
             self.rotation.setCurrentIndex(idx_rot)
+
+        # Thread selector - create options based on system CPU count
+        import os
+        import multiprocessing
+        max_threads = os.cpu_count() or 8
+        self.threads = QtWidgets.QComboBox()
+        for i in range(1, max_threads + 1):
+            label = f"{i} Core{'s' if i > 1 else ''}"
+            if i == max_threads:
+                label += " (Max)"
+            self.threads.addItem(label, i)
+        # Set to saved value or max threads
+        default_threads = defaults.threads if defaults else max_threads
+        thread_idx = max(0, self.threads.findData(default_threads))
+        self.threads.setCurrentIndex(thread_idx)
+        self.threads.setToolTip(
+            f"Anzahl der CPU-Kerne für FFmpeg-Dekodierung.\n"
+            f"System verfügbar: {max_threads} Cores"
+        )
 
         # Model selector with dropdown + custom file picker
         self.model_select = QtWidgets.QComboBox()
@@ -372,6 +397,7 @@ class LocalSettingsWidget(QtWidgets.QGroupBox):
         form.addRow(self.enable_local)
         form.addRow("Ausgabe-Unterordner", self.output_subdir)
         form.addRow("Zusatzrotation", self.rotation)
+        form.addRow("Dekodierungs-Threads", self.threads)
         form.addRow("ONNX Modell", model_container)
         form.addRow("Blur Hintergrund", self.blur_background)
         form.addRow("Masken-Expansion", self.mask_expansion)
@@ -403,6 +429,7 @@ class LocalSettingsWidget(QtWidgets.QGroupBox):
             output_subdir=self.output_subdir.text().strip() or "soft_without_obs",
             model_path=pathlib.Path(self.model_path_display.text().strip() or "models/selfie_segmentation.onnx"),
             extra_rotation_ccw=int(self.rotation.currentData()),
+            threads=int(self.threads.currentData()),
             blur_background=int(self.blur_background.value()),
             mask_expansion=int(self.mask_expansion.value()),
             feather=float(self.feather.value()),
@@ -415,6 +442,8 @@ class LocalSettingsWidget(QtWidgets.QGroupBox):
         self.output_subdir.setText(opts.output_subdir)
         idx_rot = max(0, self.rotation.findData(opts.extra_rotation_ccw))
         self.rotation.setCurrentIndex(idx_rot)
+        thread_idx = max(0, self.threads.findData(opts.threads))
+        self.threads.setCurrentIndex(thread_idx)
         self.blur_background.setValue(opts.blur_background)
         self.mask_expansion.setValue(opts.mask_expansion)
         self.feather.setValue(opts.feather)
@@ -751,6 +780,7 @@ class RenderWorker(QtCore.QThread):
                 settings_path=self.local_options.settings_path,
                 background_settings=self.local_options,
                 extra_rotation_ccw=rotate_ccw,
+                threads=self.local_options.threads,
             )
         finally:
             # Ensure progress shows 100%
