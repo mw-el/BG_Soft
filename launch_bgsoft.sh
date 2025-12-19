@@ -21,6 +21,17 @@ fi
 # Set PATH to use BG-Soft conda environment
 export PATH="$HOME/miniconda3/envs/BG-Soft/bin:$HOME/miniconda3/bin:$HOME/bin:$PATH"
 
+# Ensure CUDA/cuDNN libs installed via pip are discoverable (onnxruntime-gpu).
+CUDA_LIBS=(
+    "$HOME/miniconda3/envs/BG-Soft/lib/python3.11/site-packages/nvidia/cudnn/lib"
+    "$HOME/miniconda3/envs/BG-Soft/lib/python3.11/site-packages/nvidia/cublas/lib"
+)
+for d in "${CUDA_LIBS[@]}"; do
+    if [[ -d "$d" ]]; then
+        export LD_LIBRARY_PATH="$d:${LD_LIBRARY_PATH:-}"
+    fi
+done
+
 # Cleanup function to stop OBS when BG-Soft exits
 cleanup() {
     local exit_code=$?

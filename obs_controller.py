@@ -31,6 +31,16 @@ def load_settings(settings_file: str = "settings.json") -> Dict[str, Any]:
     return {}
 
 
+def save_settings(settings: Dict[str, Any], settings_file: str = "settings.json") -> None:
+    """Save settings to JSON file."""
+    file_path = pathlib.Path(settings_file)
+    try:
+        with open(file_path, "w") as f:
+            json.dump(settings, f, indent=2)
+    except IOError as e:
+        raise RuntimeError(f"Failed to save settings file: {e}") from e
+
+
 class RenderError(RuntimeError):
     """Raised when OBS reports a problem while processing a clip."""
 

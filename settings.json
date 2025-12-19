@@ -5,19 +5,27 @@
     "password": "obsstudio"
   },
   "background_removal": {
-    "blur_background": 3,
-    "enable_focal_blur": true,
+    "blur_background": 6,
+    "enable_focal_blur": false,
     "blur_focus_point": 0.05,
     "blur_focus_depth": 0.16,
     "transparency_threshold": 0.8,
-    "model_name": "SINet_Softmax_simple.onnx"
+    "mask_expansion": -2,
+    "feather": 0.1,
+    "smooth_contour": 0.1
   },
   "sharpen": {
-    "sharpness": 0.0,
+    "sharpness": 0.1,
     "unsharpmask_radius": 2.0
   },
   "cli_defaults": {
-    "default_sharpness": 0.10,
+    "default_sharpness": 0.1,
     "default_unsharpmask_radius": 2.0
+  },
+  "local_render": {
+    "enabled": true,
+    "model_path": "models/selfie_segmentation.onnx",
+    "output_subdir": "soft_without_obs",
+    "extra_rotation_ccw": 0
   }
 }
