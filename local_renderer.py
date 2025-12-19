@@ -660,8 +660,8 @@ def render_local(
 ) -> None:
     """Render a video locally using selfie segmentation and black background."""
     log_path = input_video.parent / f"{input_video.stem}_bgsoft_no_obs.log"
-    with log_path.open("a", encoding="utf-8") as log_file:
-        log_file.write("\n=== BG-Soft ohne OBS Run ===\n")
+    with log_path.open("w", encoding="utf-8") as log_file:
+        log_file.write("=== BG-Soft ohne OBS Run ===\n")
         log_file.write(f"Input: {input_video}\nOutput: {output_video}\nModel: {model_path}\n")
         log_file.write(f"Settings file: {settings_path}\nExtra rotation CCW: {extra_rotation_ccw}\n")
         log_file.write("Using NVENC: yes, Threads: 8, HWAccel decode/scale: yes\n")

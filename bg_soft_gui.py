@@ -721,6 +721,7 @@ class RenderWorker(QtCore.QThread):
         frames_processed = 0
         last_update = 0
         last_progress_update = 0
+        total_frames_found_time = 0
 
         while True:
             try:
@@ -731,30 +732,28 @@ class RenderWorker(QtCore.QThread):
                 with open(log_path, "r") as f:
                     content = f.read()
 
-                # Parse total frames from "Frames processed:" line
-                for line in content.split("\n"):
+                # Get total frames from duration and fps (look for "Probe:" line)
+                if total_frames is None:
+                    probe_match = re.search(r"Probe:.*fps=([\d.]+).*duration=([\d.]+)", content)
+                    if probe_match:
+                        fps = float(probe_match.group(1))
+                        duration = float(probe_match.group(2))
+                        total_frames = int(duration * fps)
+                        total_frames_found_time = time.time()
+
+                # Parse frames processed - get the LAST occurrence (most recent)
+                lines = content.split("\n")
+                for line in reversed(lines):
                     if "Frames processed:" in line:
                         try:
                             frames_processed = int(line.split("Frames processed:")[-1].strip())
                             last_progress_update = time.time()
+                            break
                         except (ValueError, IndexError):
                             pass
 
-                    # Get duration from "duration=" line to estimate total frames
-                    if total_frames is None and "duration=" in line:
-                        try:
-                            match = re.search(r"duration=([\d.]+)", line)
-                            if match:
-                                duration = float(match.group(1))
-                                # Estimate fps from "fps=" or assume 30
-                                fps_match = re.search(r"fps=([\d.]+)", line)
-                                fps = float(fps_match.group(1)) if fps_match else 30.0
-                                total_frames = int(duration * fps)
-                        except (ValueError, AttributeError):
-                            pass
-
-                # Calculate and emit progress
-                if total_frames and total_frames > 0:
+                # Calculate and emit progress (only after total_frames is known)
+                if total_frames and total_frames > 0 and time.time() - total_frames_found_time > 0.5:
                     percentage = int((frames_processed / total_frames) * 100)
                     # Cap at 99% until we confirm completion
                     percentage = min(max(percentage, 0), 99)
