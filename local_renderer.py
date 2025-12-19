@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import subprocess
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Generator, Iterable, Optional, Tuple
@@ -846,8 +848,38 @@ def render_local(
                 extra_rotation_ccw=extra_rotation_ccw,
             )
 
+            # Use a bounded queue to buffer frames and apply backpressure.
+            # This prevents the pipe buffer from overflowing when the encoder
+            # is slower than the frame producer.
+            frame_queue = queue.Queue(maxsize=30)
+            producer_exception = []
+
+            def frame_producer():
+                """Producer thread: put frames into queue, blocking if full."""
+                try:
+                    for frame in frame_iter():
+                        frame_queue.put(frame, block=True)
+                except Exception as e:
+                    producer_exception.append(e)
+                finally:
+                    frame_queue.put(None)  # Sentinel to signal EOF
+
+            def buffered_frames():
+                """Consumer generator: take frames from queue."""
+                while True:
+                    frame = frame_queue.get()
+                    if frame is None:
+                        if producer_exception:
+                            raise producer_exception[0]
+                        break
+                    yield frame
+
+            # Start producer thread
+            producer_thread = threading.Thread(target=frame_producer, daemon=True)
+            producer_thread.start()
+
             encode_video(
-                frames=frame_iter(),
+                frames=buffered_frames(),
                 out_path=output_video,
                 width=target_w,
                 height=target_h,
@@ -859,6 +891,9 @@ def render_local(
                 use_hwaccel=True,
                 metadata=metadata,
             )
+
+            # Ensure producer thread finished
+            producer_thread.join(timeout=5)
         except Exception as exc:  # noqa: BLE001
             log_file.write(f"Render failed: {exc}\n")
             log_file.flush()
