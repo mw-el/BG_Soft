@@ -24,7 +24,7 @@
   },
   "local_render": {
     "enabled": true,
-    "model_path": "models/bria_rmbg_2_0_qint8.onnx",
+    "model_path": "models/selfie_segmentation.onnx",
     "output_subdir": "soft_without_obs",
     "extra_rotation_ccw": 0
   }
