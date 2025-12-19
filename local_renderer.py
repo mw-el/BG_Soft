@@ -14,9 +14,9 @@ Dependencies: onnxruntime, numpy, ffmpeg CLI.
 
 from __future__ import annotations
 
+import datetime
 import json
 import os
-import queue
 import subprocess
 import threading
 from dataclasses import dataclass
@@ -26,6 +26,10 @@ from typing import Generator, Iterable, Optional, Tuple
 import numpy as np
 import onnxruntime as ort
 from PIL import Image, ImageFilter
+
+
+NVENC_LOCK = threading.Lock()
+RENDER_LOCK = threading.Lock()
 
 
 @dataclass
@@ -425,6 +429,23 @@ def composite(frame: np.ndarray, mask: np.ndarray, blur_background: int = 0) -> 
     return np.clip(comp, 0, 255).astype(np.uint8)
 
 
+def _ffmpeg_loglevel() -> str:
+    level = os.environ.get("BGSOFT_FFMPEG_LOGLEVEL", "info").strip()
+    return level if level else "info"
+
+
+def _build_ffmpeg_report_path(base_path: Path, stage: str) -> Path:
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    safe_stage = stage.replace(" ", "_")
+    return base_path.with_name(f"{base_path.stem}_ffmpeg_{safe_stage}_{stamp}.log")
+
+
+def _ffmpeg_env(report_path: Path, loglevel: str) -> dict:
+    env = os.environ.copy()
+    env["FFREPORT"] = f"file={report_path}:level={loglevel}"
+    return env
+
+
 def encode_video(
     frames: Iterable[np.ndarray],
     out_path: Path,
@@ -447,6 +468,16 @@ def encode_video(
     out_path = out_path.resolve()
     tmp_video = out_path.with_suffix(".video_only.mp4")
 
+    loglevel = _ffmpeg_loglevel()
+    report_base = (audio_source or out_path).resolve()
+    encode_stage = "encode_nvenc" if use_nvenc else "encode_x264"
+    encode_report = _build_ffmpeg_report_path(report_base, encode_stage)
+    encode_report.parent.mkdir(parents=True, exist_ok=True)
+    encode_env = _ffmpeg_env(encode_report, loglevel)
+    if log_stream:
+        log_stream.write(f"FFmpeg report ({encode_stage}): {encode_report}\n")
+        log_stream.flush()
+
     # Step 1: video-only
     vf_filters = []
     if rotate_deg:
@@ -463,8 +494,9 @@ def encode_video(
     cmd_video = [
         "ffmpeg",
         "-hide_banner",
+        "-report",
         "-loglevel",
-        "warning",
+        loglevel,
         "-f",
         "rawvideo",
         "-pix_fmt",
@@ -525,39 +557,107 @@ def encode_video(
         except Exception:
             pass
     err_dst = log_stream or subprocess.DEVNULL
-    proc = subprocess.Popen(cmd_video, stdin=subprocess.PIPE, stderr=err_dst)
+    proc = subprocess.Popen(cmd_video, stdin=subprocess.PIPE, stderr=err_dst, env=encode_env)
     if proc.stdin is None:
         raise RuntimeError("ffmpeg stdin not available")
+
     written_frames = 0
+    broken_pipe_error = None
     try:
         for frame in frames:
             try:
                 proc.stdin.write(frame.tobytes())
                 written_frames += 1
-            except BrokenPipeError:
+
+                # Log progress for longer videos
+                if written_frames % 100 == 0:
+                    if log_stream:
+                        log_stream.write(f"Encoder progress: {written_frames} frames written\n")
+                        log_stream.flush()
+
+                # Check if FFmpeg process is still alive
+                if proc.poll() is not None:
+                    # Process exited, capture return code
+                    retcode = proc.returncode
+                    if log_stream:
+                        log_stream.write(f"FFmpeg encoder process exited prematurely with code {retcode} after {written_frames} frames\n")
+                        log_stream.flush()
+                    broken_pipe_error = RuntimeError(f"FFmpeg encoder exited with code {retcode} after writing {written_frames} frames")
+                    break
+
+            except BrokenPipeError as e:
                 if log_stream:
-                    log_stream.write("Encode stdin broken pipe; encoder exited early.\n")
+                    log_stream.write(f"Encode stdin broken pipe after {written_frames} frames: {e}\n")
+                    log_stream.write(f"FFmpeg process returncode: {proc.poll()}\n")
                     log_stream.flush()
+                broken_pipe_error = e
+                break
+            except (OSError, IOError) as e:
+                if log_stream:
+                    log_stream.write(f"IO error writing to FFmpeg stdin after {written_frames} frames: {e}\n")
+                    log_stream.flush()
+                broken_pipe_error = e
                 break
     finally:
-        proc.stdin.close()
-        proc.wait()
+        # Close stdin to signal EOF to FFmpeg
+        try:
+            proc.stdin.close()
+        except Exception as e:
+            if log_stream:
+                log_stream.write(f"Error closing FFmpeg stdin: {e}\n")
+                log_stream.flush()
+
+        # Wait for process to complete with timeout
+        try:
+            proc.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            if log_stream:
+                log_stream.write(f"FFmpeg encoder timeout after {written_frames} frames - killing process\n")
+                log_stream.flush()
+            try:
+                proc.kill()
+                proc.wait(timeout=5)
+            except Exception:
+                pass
+
+        # Report final status
+        if log_stream:
+            log_stream.write(f"FFmpeg encoder completed: returncode={proc.returncode}, frames_written={written_frames}\n")
+            log_stream.flush()
+
+        # Handle errors
+        if broken_pipe_error:
+            raise RuntimeError(f"Broken pipe error after writing {written_frames} frames: {broken_pipe_error}")
+
         if proc.returncode != 0:
-            msg = f"ffmpeg video encode failed with code {proc.returncode}"
+            msg = f"ffmpeg video encode failed with code {proc.returncode} (frames written: {written_frames})"
             if log_stream:
                 log_stream.write(msg + "\n")
                 log_stream.flush()
             raise RuntimeError(msg)
+
         if written_frames == 0:
             raise RuntimeError("ffmpeg video encode received 0 frames")
 
     # Step 2: mux audio if available
     if audio_source:
+        if log_stream:
+            log_stream.write(f"Starting audio mux: {audio_source}\n")
+            log_stream.flush()
+
+        mux_report = _build_ffmpeg_report_path(report_base, "mux")
+        mux_report.parent.mkdir(parents=True, exist_ok=True)
+        mux_env = _ffmpeg_env(mux_report, loglevel)
+        if log_stream:
+            log_stream.write(f"FFmpeg report (mux): {mux_report}\n")
+            log_stream.flush()
+
         cmd_mux = [
             "ffmpeg",
             "-hide_banner",
+            "-report",
             "-loglevel",
-            "warning",
+            loglevel,
             "-i",
             str(tmp_video),
             "-i",
@@ -586,24 +686,63 @@ def encode_video(
                 log_stream.flush()
             except Exception:
                 pass
-        mux_proc = subprocess.run(
-            cmd_mux,
-            stdout=log_stream or subprocess.DEVNULL,
-            stderr=log_stream or subprocess.DEVNULL,
-        )
-        if mux_proc.returncode != 0:
-            msg = f"ffmpeg mux failed with code {mux_proc.returncode}"
+
+        try:
+            mux_proc = subprocess.run(
+                cmd_mux,
+                stdout=log_stream or subprocess.DEVNULL,
+                stderr=log_stream or subprocess.DEVNULL,
+                env=mux_env,
+                timeout=300,  # 5 minute timeout for mux
+            )
+            if mux_proc.returncode != 0:
+                msg = f"ffmpeg mux failed with code {mux_proc.returncode}"
+                if log_stream:
+                    log_stream.write(msg + "\n")
+                    log_stream.flush()
+                raise RuntimeError(msg)
+            if log_stream:
+                log_stream.write(f"Audio mux completed successfully\n")
+                log_stream.flush()
+        except subprocess.TimeoutExpired:
+            msg = "ffmpeg mux timeout (>5 min) - killed process"
             if log_stream:
                 log_stream.write(msg + "\n")
                 log_stream.flush()
             raise RuntimeError(msg)
+        except Exception as e:
+            msg = f"ffmpeg mux unexpected error: {e}"
+            if log_stream:
+                log_stream.write(msg + "\n")
+                log_stream.flush()
+            raise RuntimeError(msg)
+
+        # Cleanup temp video file
         try:
             tmp_video.unlink()
-        except Exception:
-            pass
+            if log_stream:
+                log_stream.write(f"Cleaned up temp video file\n")
+                log_stream.flush()
+        except Exception as e:
+            if log_stream:
+                log_stream.write(f"Warning: Could not delete temp file {tmp_video}: {e}\n")
+                log_stream.flush()
     else:
         # No audio, move video-only to final path
-        tmp_video.replace(out_path)
+        if log_stream:
+            log_stream.write(f"No audio source - moving video to final path\n")
+            log_stream.flush()
+        try:
+            tmp_video.replace(out_path)
+            if log_stream:
+                log_stream.write(f"Video file moved to final path\n")
+                log_stream.flush()
+        except Exception as e:
+            msg = f"Failed to move video file: {e}"
+            if log_stream:
+                log_stream.write(msg + "\n")
+                log_stream.flush()
+            raise RuntimeError(msg)
 
 
 def render_preview_frame(
@@ -718,6 +857,7 @@ def render_local(
     max_frames: Optional[int] = None,
     extra_rotation_ccw: int = 0,
     threads: int = 8,
+    use_nvenc: bool = True,
     background_settings: Optional[object] = None,
 ) -> None:
     """Render a video locally using selfie segmentation and black background."""
@@ -726,160 +866,192 @@ def render_local(
         log_file.write("=== BG-Soft ohne OBS Run ===\n")
         log_file.write(f"Input: {input_video}\nOutput: {output_video}\nModel: {model_path}\n")
         log_file.write(f"Settings file: {settings_path}\nExtra rotation CCW: {extra_rotation_ccw}\n")
-        log_file.write("Using NVENC: yes, Threads: 8, HWAccel decode/scale: yes\n")
-        log_file.flush()
-
-        # Load filter settings
-        settings = {}
-        if settings_path and settings_path.exists():
-            try:
-                settings = json.loads(settings_path.read_text(encoding="utf-8"))
-                settings = settings.get("background_removal", settings)
-            except Exception:
-                settings = {}
-
-        def _from_bg(key: str, default_val: float | int) -> float | int:
-            if background_settings is None:
-                return default_val
-            if isinstance(background_settings, dict):
-                return background_settings.get(key, default_val)  # type: ignore[return-value]
-            return getattr(background_settings, key, default_val)
-
-        threshold = float(_from_bg("threshold", settings.get("threshold", settings.get("transparency_threshold", 0.65))))
-        smooth_contour = float(_from_bg("smooth_contour", settings.get("smooth_contour", 0.05)))
-        mask_expansion = int(_from_bg("mask_expansion", settings.get("mask_expansion", -5)))
-        feather = float(_from_bg("feather", settings.get("feather", 0.0)))
-        blur_background = int(_from_bg("blur_background", settings.get("blur_background", 0)))
-
-        probe = probe_video(input_video)
-        # Base dimensions after metadata rotation only
-        base_w, base_h = effective_dimensions(probe.width, probe.height, probe.rotation_deg)
-        target_w = force_width or base_w
-        target_h = force_height or base_h
-        rotate_out = (probe.rotation_deg + extra_rotation_ccw) % 360
-
         log_file.write(
-            f"Probe: {probe.width}x{probe.height}, rotation={probe.rotation_deg}, fps={probe.fps}, duration={probe.duration}s\n"
-        )
-        log_file.write(
-            f"Target: {target_w}x{target_h}, output rotation={rotate_out} (includes manual rotation)\n"
-        )
-        log_file.write(
-            "BG params: "
-            f"threshold={threshold}, smooth_contour={smooth_contour}, mask_expansion={mask_expansion}, "
-            f"feather={feather}, blur_background={blur_background}\n"
+            f"Using NVENC: {'yes' if use_nvenc else 'no'}, Threads: {threads}, HWAccel decode/scale: no\n"
         )
         log_file.flush()
 
-        session = load_selfie_model(model_path, log_stream=log_file)
+        render_lock_acquired = False
+        try:
+            log_file.write("Waiting for global render slot...\n")
+            log_file.flush()
+            RENDER_LOCK.acquire()
+            render_lock_acquired = True
+            log_file.write("Global render slot acquired.\n")
+            log_file.flush()
 
-        debug_frames = int(os.environ.get("BGSOFT_DEBUG_FRAMES", "2"))
-        dump_debug = os.environ.get("BGSOFT_DUMP_DEBUG", "").strip() in {"1", "true", "yes", "on"}
+            _render_local_impl(
+                input_video=input_video,
+                output_video=output_video,
+                model_path=model_path,
+                force_width=force_width,
+                force_height=force_height,
+                settings_path=settings_path,
+                max_frames=max_frames,
+                extra_rotation_ccw=extra_rotation_ccw,
+                threads=threads,
+                use_nvenc=use_nvenc,
+                background_settings=background_settings,
+                log_file=log_file,
+            )
+        finally:
+            if render_lock_acquired:
+                RENDER_LOCK.release()
+                log_file.write("Global render slot released.\n")
+                log_file.flush()
+
+
+def _render_local_impl(
+    *,
+    input_video: Path,
+    output_video: Path,
+    model_path: Path,
+    force_width: Optional[int],
+    force_height: Optional[int],
+    settings_path: Optional[Path],
+    max_frames: Optional[int],
+    extra_rotation_ccw: int,
+    threads: int,
+    use_nvenc: bool,
+    background_settings: Optional[object],
+    log_file,
+) -> None:
+    # Load filter settings
+    settings = {}
+    if settings_path and settings_path.exists():
+        try:
+            settings = json.loads(settings_path.read_text(encoding="utf-8"))
+            settings = settings.get("background_removal", settings)
+        except Exception:
+            settings = {}
+
+    def _from_bg(key: str, default_val: float | int) -> float | int:
+        if background_settings is None:
+            return default_val
+        if isinstance(background_settings, dict):
+            return background_settings.get(key, default_val)  # type: ignore[return-value]
+        return getattr(background_settings, key, default_val)
+
+    threshold = float(_from_bg("threshold", settings.get("threshold", settings.get("transparency_threshold", 0.65))))
+    smooth_contour = float(_from_bg("smooth_contour", settings.get("smooth_contour", 0.05)))
+    mask_expansion = int(_from_bg("mask_expansion", settings.get("mask_expansion", -5)))
+    feather = float(_from_bg("feather", settings.get("feather", 0.0)))
+    blur_background = int(_from_bg("blur_background", settings.get("blur_background", 0)))
+
+    probe = probe_video(input_video)
+    # Base dimensions after metadata rotation only
+    base_w, base_h = effective_dimensions(probe.width, probe.height, probe.rotation_deg)
+    target_w = force_width or base_w
+    target_h = force_height or base_h
+    rotate_out = (probe.rotation_deg + extra_rotation_ccw) % 360
+
+    log_file.write(
+        f"Probe: {probe.width}x{probe.height}, rotation={probe.rotation_deg}, fps={probe.fps}, duration={probe.duration}s\n"
+    )
+    log_file.write(f"Target: {target_w}x{target_h}, output rotation={rotate_out} (includes manual rotation)\n")
+    log_file.write(
+        "BG params: "
+        f"threshold={threshold}, smooth_contour={smooth_contour}, mask_expansion={mask_expansion}, "
+        f"feather={feather}, blur_background={blur_background}\n"
+    )
+    log_file.flush()
+
+    session = load_selfie_model(model_path, log_stream=log_file)
+
+    debug_frames = int(os.environ.get("BGSOFT_DEBUG_FRAMES", "2"))
+    dump_debug = os.environ.get("BGSOFT_DUMP_DEBUG", "").strip() in {"1", "true", "yes", "on"}
+    frame_counter = 0
+
+    def run_pipeline(use_hw_encoder: bool) -> None:
+        nonlocal frame_counter
         frame_counter = 0
 
         def frame_iter():
             nonlocal frame_counter
-            for idx, frame in enumerate(
-                iter_frames(
-                input_video,
-                target_w,
-                target_h,
-                log_stream=log_file,
-                threads=threads,
-                use_hwaccel=False,
-            )
-            ):
-                mask_raw = run_selfie_mask(session, frame, log_stream=log_file if idx < debug_frames else None)
-                mask = apply_mask_filters(
-                    mask_raw,
-                    threshold=threshold,
-                    smooth_contour=smooth_contour,
-                    mask_expansion=mask_expansion,
-                    feather=feather,
+            try:
+                frame_src = iter_frames(
+                    input_video,
+                    target_w,
+                    target_h,
+                    log_stream=log_file,
+                    threads=threads,
+                    use_hwaccel=False,
                 )
-                comp = composite(frame, mask, blur_background=blur_background)
-                if idx < debug_frames:
+                for idx, frame in enumerate(frame_src):
                     try:
-                        import numpy as _np
-
-                        md = float(_np.abs(frame.astype(_np.int16) - comp.astype(_np.int16)).mean())
-                        log_file.write(
-                            f"Debug frame {idx}: mask mean={float(_np.mean(mask)):.4f}, "
-                            f"alpha<0.5={float(_np.mean(mask < 0.5)):.4f}, mean_abs_delta={md:.4f}\n"
+                        mask_raw = run_selfie_mask(session, frame, log_stream=log_file if idx < debug_frames else None)
+                        mask = apply_mask_filters(
+                            mask_raw,
+                            threshold=threshold,
+                            smooth_contour=smooth_contour,
+                            mask_expansion=mask_expansion,
+                            feather=feather,
                         )
+                        comp = composite(frame, mask, blur_background=blur_background)
+                        if idx < debug_frames:
+                            try:
+                                import numpy as _np
+
+                                md = float(_np.abs(frame.astype(_np.int16) - comp.astype(_np.int16)).mean())
+                                log_file.write(
+                                    f"Debug frame {idx}: mask mean={float(_np.mean(mask)):.4f}, "
+                                    f"alpha<0.5={float(_np.mean(mask < 0.5)):.4f}, mean_abs_delta={md:.4f}\n"
+                                )
+                                log_file.flush()
+                                if dump_debug:
+                                    from PIL import Image as _Image
+                                    import time as _time
+
+                                    stamp = int(_time.time())
+                                    base = input_video.parent / f"{input_video.stem}_debug_{stamp}_{idx}"
+                                    _Image.fromarray(frame, mode="RGB").save(base.with_suffix(".in.png"))
+                                    _Image.fromarray((mask * 255.0).clip(0, 255).astype("uint8"), mode="L").save(
+                                        base.with_suffix(".mask.png")
+                                    )
+                                    _Image.fromarray(comp, mode="RGB").save(base.with_suffix(".out.png"))
+                            except Exception:
+                                pass
+                        yield comp
+                        frame_counter += 1
+
+                        if frame_counter % 50 == 0:
+                            log_file.write(f"Frames processed: {frame_counter}\n")
+                            log_file.flush()
+
+                        if max_frames and frame_counter >= max_frames:
+                            log_file.write(f"Reached max_frames limit ({max_frames})\n")
+                            log_file.flush()
+                            break
+                    except Exception as e:
+                        log_file.write(f"Error processing frame {idx}: {e}\n")
                         log_file.flush()
-                        if dump_debug:
-                            from PIL import Image as _Image
-                            import time as _time
+                        raise
 
-                            stamp = int(_time.time())
-                            base = input_video.parent / f"{input_video.stem}_debug_{stamp}_{idx}"
-                            _Image.fromarray(frame, mode="RGB").save(base.with_suffix(".in.png"))
-                            _Image.fromarray((mask * 255.0).clip(0, 255).astype("uint8"), mode="L").save(
-                                base.with_suffix(".mask.png")
-                            )
-                            _Image.fromarray(comp, mode="RGB").save(base.with_suffix(".out.png"))
-                    except Exception:
-                        pass
-                yield comp
-                frame_counter += 1
+                log_file.write(f"Frame iteration complete: {frame_counter} total frames\n")
+                log_file.flush()
+            except GeneratorExit:
+                log_file.write(f"Frame generator closed by consumer (received {frame_counter} frames)\n")
+                log_file.flush()
+                raise
+            except Exception as e:
+                log_file.write(f"Frame iteration failed: {e}\n")
+                log_file.flush()
+                raise
 
-                # Write progress every 50 frames so monitoring can track progress
-                if frame_counter % 50 == 0:
-                    log_file.write(f"Frames processed: {frame_counter}\n")
-                    log_file.flush()
+        metadata = _build_metadata_dict(
+            model_path=model_path,
+            blur_background=blur_background,
+            mask_expansion=mask_expansion,
+            feather=feather,
+            smooth_contour=smooth_contour,
+            transparency_threshold=threshold,
+            extra_rotation_ccw=extra_rotation_ccw,
+        )
 
-                if max_frames and frame_counter >= max_frames:
-                    break
-
-            # Write final frame count
-            log_file.write(f"Frames processed: {frame_counter}\n")
-            log_file.flush()
-
+        frames_iter = frame_iter()
         try:
-            # Build metadata from render settings
-            metadata = _build_metadata_dict(
-                model_path=model_path,
-                blur_background=blur_background,
-                mask_expansion=mask_expansion,
-                feather=feather,
-                smooth_contour=smooth_contour,
-                transparency_threshold=threshold,
-                extra_rotation_ccw=extra_rotation_ccw,
-            )
-
-            # Use a bounded queue to buffer frames and apply backpressure.
-            # This prevents the pipe buffer from overflowing when the encoder
-            # is slower than the frame producer.
-            frame_queue = queue.Queue(maxsize=30)
-            producer_exception = []
-
-            def frame_producer():
-                """Producer thread: put frames into queue, blocking if full."""
-                try:
-                    for frame in frame_iter():
-                        frame_queue.put(frame, block=True)
-                except Exception as e:
-                    producer_exception.append(e)
-                finally:
-                    frame_queue.put(None)  # Sentinel to signal EOF
-
-            def buffered_frames():
-                """Consumer generator: take frames from queue."""
-                while True:
-                    frame = frame_queue.get()
-                    if frame is None:
-                        if producer_exception:
-                            raise producer_exception[0]
-                        break
-                    yield frame
-
-            # Start producer thread
-            producer_thread = threading.Thread(target=frame_producer, daemon=True)
-            producer_thread.start()
-
             encode_video(
-                frames=buffered_frames(),
+                frames=frames_iter,
                 out_path=output_video,
                 width=target_w,
                 height=target_h,
@@ -888,21 +1060,55 @@ def render_local(
                 rotate_deg=rotate_out,
                 log_stream=log_file,
                 threads=threads,
+                use_nvenc=use_hw_encoder,
                 use_hwaccel=True,
                 metadata=metadata,
             )
+        finally:
+            close_iter = getattr(frames_iter, "close", None)
+            if callable(close_iter):
+                close_iter()
 
-            # Ensure producer thread finished
-            producer_thread.join(timeout=5)
-        except Exception as exc:  # noqa: BLE001
-            log_file.write(f"Render failed: {exc}\n")
+    nvenc_lock_acquired = False
+
+    def run_with_encoder(use_hw_encoder: bool) -> None:
+        nonlocal nvenc_lock_acquired
+        if use_hw_encoder:
+            log_file.write("Waiting for NVENC slot...\n")
             log_file.flush()
-            raise
-        else:
-            if frame_counter == 0:
-                raise RuntimeError("Render produced 0 frames (ffmpeg decode/filter failure)")
-            log_file.write(f"Completed successfully: {output_video}\n")
+            NVENC_LOCK.acquire()
+            nvenc_lock_acquired = True
+            log_file.write("NVENC slot acquired.\n")
             log_file.flush()
+        try:
+            run_pipeline(use_hw_encoder)
+        finally:
+            if use_hw_encoder and nvenc_lock_acquired:
+                NVENC_LOCK.release()
+                nvenc_lock_acquired = False
+                log_file.write("NVENC slot released.\n")
+                log_file.flush()
+
+    try:
+        try:
+            run_with_encoder(use_nvenc)
+        except RuntimeError as exc:
+            msg = str(exc).lower()
+            if use_nvenc and ("nvenc" in msg or "encode" in msg):
+                log_file.write(f"NVENC encode failed ({exc}). Retrying with CPU/libx264.\n")
+                log_file.flush()
+                run_with_encoder(False)
+            else:
+                raise
+    except Exception as exc:  # noqa: BLE001
+        log_file.write(f"Render failed: {exc}\n")
+        log_file.flush()
+        raise
+    else:
+        if frame_counter == 0:
+            raise RuntimeError("Render produced 0 frames (ffmpeg decode/filter failure)")
+        log_file.write(f"Completed successfully: {output_video}\n")
+        log_file.flush()
 
 
 if __name__ == "__main__":
@@ -917,6 +1123,8 @@ if __name__ == "__main__":
     parser.add_argument("--settings", type=Path, default=Path("settings.json"), help="Settings file (for thresholds/blur)")
     parser.add_argument("--max-frames", type=int, default=None, help="Limit number of frames (for quick tests)")
     parser.add_argument("--rotate-ccw", type=int, default=0, help="Extra rotation CCW in degrees (multiples of 90)")
+    parser.add_argument("--threads", type=int, default=8, help="FFmpeg decode thread count")
+    parser.add_argument("--no-nvenc", action="store_true", help="Disable NVENC and use CPU libx264 encoding")
     args = parser.parse_args()
 
     render_local(
@@ -928,4 +1136,6 @@ if __name__ == "__main__":
         settings_path=args.settings,
         max_frames=args.max_frames,
         extra_rotation_ccw=args.rotate_ccw,
+        threads=args.threads,
+        use_nvenc=not args.no_nvenc,
     )
