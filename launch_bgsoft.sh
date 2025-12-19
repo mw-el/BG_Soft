@@ -21,8 +21,11 @@ fi
 # Set PATH to use BG-Soft conda environment
 export PATH="$HOME/miniconda3/envs/BG-Soft/bin:$HOME/miniconda3/bin:$HOME/bin:$PATH"
 
-# Ensure CUDA/cuDNN libs installed via pip are discoverable (onnxruntime-gpu).
+# Ensure CUDA/cuDNN libs are discoverable (Phase 1 GPU acceleration)
+# Priority: conda-installed libs (cuDNN 9.x via conda) > pip-installed libs
 CUDA_LIBS=(
+    "$HOME/miniconda3/envs/BG-Soft/lib"           # Conda-installed cuDNN, CUDA libs
+    "$HOME/miniconda3/envs/BG-Soft/lib64"         # 64-bit CUDA libs
     "$HOME/miniconda3/envs/BG-Soft/lib/python3.11/site-packages/nvidia/cudnn/lib"
     "$HOME/miniconda3/envs/BG-Soft/lib/python3.11/site-packages/nvidia/cublas/lib"
 )
@@ -31,6 +34,18 @@ for d in "${CUDA_LIBS[@]}"; do
         export LD_LIBRARY_PATH="$d:${LD_LIBRARY_PATH:-}"
     fi
 done
+
+# Verify GPU acceleration is available
+echo "[→] Checking GPU acceleration availability..."
+"$PYTHON" << 'PYEOF'
+import onnxruntime as ort
+providers = ort.get_available_providers()
+has_gpu = any("CUDA" in p for p in providers)
+status = "✓ GPU (CUDA) acceleration ENABLED" if has_gpu else "⚠ GPU acceleration not available"
+print(f"[✓] ONNX providers: {', '.join(providers)}")
+print(f"[{('✓' if has_gpu else '!')}] Status: {status}")
+PYEOF
+echo ""
 
 # Cleanup function to stop OBS when BG-Soft exits
 cleanup() {
