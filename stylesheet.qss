@@ -42,10 +42,10 @@ QPushButton#settingsBtn:hover {
 /* Primary action buttons - green */
 QPushButton#startBtn {
     background-color: #4CAF50;
-    font-size: 15px;
+    font-size: 14px;
     font-weight: bold;
-    min-height: 56px;
-    padding: 14px 28px;
+    min-height: 44px;
+    padding: 12px 24px;
 }
 
 QPushButton#startBtn:hover {
