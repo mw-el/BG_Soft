@@ -248,26 +248,44 @@ def _nearest_resize(frame: np.ndarray, target_h: int, target_w: int) -> np.ndarr
 
 def run_selfie_mask(session: ort.InferenceSession, frame: np.ndarray, log_stream: Optional[object] = None) -> np.ndarray:
     """Run ONNX segmentation model. Expect frame in RGB uint8."""
-    inp_meta = session.get_inputs()[0]
-    shape = inp_meta.shape
-    # Determine expected H/W and layout
-    # Common selfie model: [1,256,256,3] (NHWC)
-    if len(shape) == 4 and shape[1] and shape[2] and shape[3] == 3:
-        target_h = int(shape[1])
-        target_w = int(shape[2])
-        resized = np.array(Image.fromarray(frame, mode="RGB").resize((target_w, target_h), Image.BILINEAR))
-        inp = resized.astype(np.float32) / 255.0
-        inp = inp[None, ...]  # NHWC
-    else:
-        # Fallback: assume NCHW [1,3,H,W]
-        target_h = int(shape[2]) if len(shape) > 2 and shape[2] else frame.shape[0]
-        target_w = int(shape[3]) if len(shape) > 3 and shape[3] else frame.shape[1]
-        resized = np.array(Image.fromarray(frame, mode="RGB").resize((target_w, target_h), Image.BILINEAR))
-        inp = resized.astype(np.float32) / 255.0
-        inp = np.transpose(inp, (2, 0, 1))[None, ...]
+    try:
+        inp_meta = session.get_inputs()[0]
+        shape = inp_meta.shape
 
-    input_name = inp_meta.name
-    output = session.run(None, {input_name: inp})[0]
+        if log_stream:
+            try:
+                outputs = session.get_outputs()
+                log_stream.write(f"Model input shape: {shape}\n")
+                for i, out in enumerate(outputs):
+                    log_stream.write(f"Model output[{i}] shape: {out.shape}\n")
+                log_stream.flush()
+            except Exception:
+                pass
+
+        # Determine expected H/W and layout
+        # Common selfie model: [1,256,256,3] (NHWC)
+        if len(shape) == 4 and shape[1] and shape[2] and shape[3] == 3:
+            target_h = int(shape[1])
+            target_w = int(shape[2])
+            resized = np.array(Image.fromarray(frame, mode="RGB").resize((target_w, target_h), Image.BILINEAR))
+            inp = resized.astype(np.float32) / 255.0
+            inp = inp[None, ...]  # NHWC
+        else:
+            # Fallback: assume NCHW [1,3,H,W]
+            target_h = int(shape[2]) if len(shape) > 2 and shape[2] else frame.shape[0]
+            target_w = int(shape[3]) if len(shape) > 3 and shape[3] else frame.shape[1]
+            resized = np.array(Image.fromarray(frame, mode="RGB").resize((target_w, target_h), Image.BILINEAR))
+            inp = resized.astype(np.float32) / 255.0
+            inp = np.transpose(inp, (2, 0, 1))[None, ...]
+
+        input_name = inp_meta.name
+        output = session.run(None, {input_name: inp})[0]
+    except Exception as e:
+        msg = f"Model inference failed: {e}"
+        if log_stream:
+            log_stream.write(f"ERROR: {msg}\n")
+            log_stream.flush()
+        raise RuntimeError(msg) from e
     raw = output.astype(np.float32)
     if log_stream:
         try:

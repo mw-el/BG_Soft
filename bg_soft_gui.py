@@ -501,10 +501,10 @@ class SharpenSettingsWidget(QtWidgets.QGroupBox):
 
 
 class LocalSettingsWidget(QtWidgets.QGroupBox):
-    """Controls for the lokalen Renderer ohne OBS."""
+    """Controls for the local renderer."""
 
     def __init__(self, defaults: Optional[LocalRenderOptions] = None) -> None:
-        super().__init__("Ohne OBS rendern")
+        super().__init__("Renderoptionen")
         form = QtWidgets.QFormLayout(self)
 
         self.enable_local = QtWidgets.QCheckBox("Lokalen Renderer verwenden (kein OBS)")
@@ -1001,16 +1001,10 @@ class SettingsDialog(QtWidgets.QDialog):
         scroll.setWidgetResizable(True)
         container = QtWidgets.QWidget()
         container_layout = QtWidgets.QVBoxLayout(container)
-        container_layout.addWidget(self.conn_widget)
-        container_layout.addWidget(self.bg_widget)
-        container_layout.addWidget(self.sharpen_widget)
+        # Only show local renderer settings (no OBS)
         container_layout.addWidget(self.local_widget)
         container_layout.addStretch()
         scroll.setWidget(container)
-
-        # Hide OBS connection settings if local render is enabled
-        self._update_connection_visibility()
-        self.local_widget.enable_local.toggled.connect(self._update_connection_visibility)
 
         button_layout = QtWidgets.QHBoxLayout()
         save_default_btn = QtWidgets.QPushButton("Als Standard speichern")
