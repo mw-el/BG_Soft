@@ -715,10 +715,12 @@ class RenderWorker(QtCore.QThread):
     def _monitor_progress(self, video_path: str, log_path: pathlib.Path) -> None:
         """Monitor render progress from log file and emit progress updates."""
         import time
+        import re
 
         total_frames = None
         frames_processed = 0
         last_update = 0
+        last_progress_update = 0
 
         while True:
             try:
@@ -734,14 +736,13 @@ class RenderWorker(QtCore.QThread):
                     if "Frames processed:" in line:
                         try:
                             frames_processed = int(line.split("Frames processed:")[-1].strip())
+                            last_progress_update = time.time()
                         except (ValueError, IndexError):
                             pass
 
                     # Get duration from "duration=" line to estimate total frames
                     if total_frames is None and "duration=" in line:
                         try:
-                            import re
-
                             match = re.search(r"duration=([\d.]+)", line)
                             if match:
                                 duration = float(match.group(1))
@@ -754,7 +755,8 @@ class RenderWorker(QtCore.QThread):
 
                 # Calculate and emit progress
                 if total_frames and total_frames > 0:
-                    percentage = min(int((frames_processed / total_frames) * 100), 99)
+                    percentage = int((frames_processed / total_frames) * 100)
+                    percentage = min(max(percentage, 0), 100)  # Clamp between 0-100
                     current_time = time.time()
                     if current_time - last_update > 0.5:  # Update every 500ms
                         self.file_progress.emit(video_path, percentage)
@@ -762,8 +764,12 @@ class RenderWorker(QtCore.QThread):
 
                 time.sleep(0.2)
 
-                # Stop monitoring when render completes
+                # Check if render completed
                 if "Completed successfully:" in content:
+                    break
+
+                # Timeout: if no progress for 10 seconds, assume it's done
+                if time.time() - last_progress_update > 10:
                     break
 
             except Exception:
