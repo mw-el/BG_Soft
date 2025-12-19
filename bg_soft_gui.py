@@ -756,7 +756,8 @@ class RenderWorker(QtCore.QThread):
                 # Calculate and emit progress
                 if total_frames and total_frames > 0:
                     percentage = int((frames_processed / total_frames) * 100)
-                    percentage = min(max(percentage, 0), 100)  # Clamp between 0-100
+                    # Cap at 99% until we confirm completion
+                    percentage = min(max(percentage, 0), 99)
                     current_time = time.time()
                     if current_time - last_update > 0.5:  # Update every 500ms
                         self.file_progress.emit(video_path, percentage)
@@ -768,8 +769,8 @@ class RenderWorker(QtCore.QThread):
                 if "Completed successfully:" in content:
                     break
 
-                # Timeout: if no progress for 10 seconds, assume it's done
-                if time.time() - last_progress_update > 10:
+                # Timeout: if no progress for 15 seconds, assume it's done
+                if time.time() - last_progress_update > 15:
                     break
 
             except Exception:
