@@ -122,8 +122,9 @@ def iter_frames(
         cmd += [
             "-vf",
             # GPU scaling via scale_cuda, download to CPU, then format conversion to RGB24.
-            # This maximizes GPU utilization while maintaining format compatibility.
-            f"scale_cuda={target_width}:{target_height},hwdownload,format=nv12,format=rgb24",
+            # hwdownload outputs NV12 by default, so only convert to RGB24 (not nv12 first).
+            # Multiple consecutive format filters are invalid in FFmpeg filter chains.
+            f"scale_cuda={target_width}:{target_height},hwdownload,format=rgb24",
         ]
     else:
         cmd += [
@@ -618,6 +619,79 @@ def encode_video(
         tmp_video.replace(out_path)
 
 
+def render_preview_frame(
+    video_path: Path,
+    model_path: Path,
+    frame_index: int = 0,
+    blur_background: int = 0,
+    mask_expansion: int = -5,
+    feather: float = 0.0,
+    smooth_contour: float = 0.05,
+    transparency_threshold: float = 0.65,
+) -> Optional[np.ndarray]:
+    """Render a single frame for preview in the settings dialog.
+
+    Returns RGB frame as uint8 numpy array, or None if rendering fails.
+    """
+    try:
+        # Validate inputs
+        if not video_path or not video_path.exists():
+            return None
+        if not model_path or not model_path.exists():
+            return None
+
+        # Probe video to get dimensions
+        try:
+            probe = probe_video(video_path)
+        except Exception:
+            return None
+
+        if probe.width == 0 or probe.height == 0:
+            return None
+
+        # Load model with timeout/error handling
+        try:
+            session = load_selfie_model(model_path)
+        except Exception:
+            return None
+
+        # Extract just the frame we need
+        try:
+            for idx, frame in enumerate(
+                iter_frames(
+                    video_path,
+                    probe.width,
+                    probe.height,
+                    log_stream=None,
+                    threads=2,
+                    use_hwaccel=True,
+                )
+            ):
+                if idx == frame_index:
+                    # Run inference and processing with error handling
+                    try:
+                        mask_raw = run_selfie_mask(session, frame)
+                        mask = apply_mask_filters(
+                            mask_raw,
+                            threshold=transparency_threshold,
+                            smooth_contour=smooth_contour,
+                            mask_expansion=mask_expansion,
+                            feather=feather,
+                        )
+                        comp = composite(frame, mask, blur_background=blur_background)
+                        return comp
+                    except Exception:
+                        return None
+                elif idx > frame_index:
+                    break
+        except Exception:
+            return None
+
+        return None
+    except Exception:
+        return None
+
+
 def _build_metadata_dict(
     model_path: Path,
     blur_background: int,
@@ -761,8 +835,16 @@ def render_local(
                         pass
                 yield comp
                 frame_counter += 1
+
+                # Write progress every 5 frames so monitoring can track progress
+                if frame_counter % 5 == 0:
+                    log_file.write(f"Frames processed: {frame_counter}\n")
+                    log_file.flush()
+
                 if max_frames and frame_counter >= max_frames:
                     break
+
+            # Write final frame count
             log_file.write(f"Frames processed: {frame_counter}\n")
             log_file.flush()
 

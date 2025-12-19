@@ -4,7 +4,7 @@
     "mask_expansion": -4,
     "feather": 0.1,
     "smooth_contour": 0.1,
-    "transparency_threshold": 0.8
+    "transparency_threshold": 0.05
   },
   "local_render": {
     "enabled": true,
