@@ -121,10 +121,9 @@ def iter_frames(
     if use_hwaccel:
         cmd += [
             "-vf",
-            # GPU scaling via scale_cuda, download to CPU.
-            # hwdownload outputs frames to CPU RAM (NV12 format by default).
-            # The output -pix_fmt rgb24 will handle final format conversion.
-            f"scale_cuda={target_width}:{target_height},hwdownload",
+            # GPU scaling and format conversion via scale_npp (NVIDIA Performance Primitives).
+            # Handles both scaling and NV12→RGB24 conversion entirely on GPU.
+            f"scale_npp=w={target_width}:h={target_height}:format=rgb24",
         ]
     else:
         cmd += [
