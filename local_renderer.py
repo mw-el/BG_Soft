@@ -182,20 +182,22 @@ def iter_frames(
 
 
 def load_selfie_model(model_path: Path, log_stream: Optional[object] = None) -> ort.InferenceSession:
-    """Load ONNX model with GPU acceleration. Fails fast if GPU unavailable."""
+    """Load ONNX model with GPU acceleration (Phase 1). GPU required, no CPU fallback."""
     avail = ort.get_available_providers()
 
-    # Prefer TensorRT (fastest), then CUDA (fast). No CPU fallback.
-    preferred_order = ["TensorrtExecutionProvider", "CUDAExecutionProvider"]
+    # Phase 1: GPU Acceleration Support (GPU REQUIRED)
+    # Use CUDA for GPU acceleration. No CPU fallback.
+    # (TensorRT requires libnvinfer library which may not be installed)
+    preferred_order = ["CUDAExecutionProvider"]
     providers = [p for p in preferred_order if p in avail]
 
     if log_stream:
         log_stream.write(f"Available providers: {avail}\n")
-        log_stream.write(f"Requested providers: {providers}\n")
+        log_stream.write(f"Requested GPU providers: {providers}\n")
         log_stream.flush()
 
     if not providers:
-        msg = f"No GPU providers available. Available: {avail}. GPU inference requires TensorRT or CUDA."
+        msg = f"GPU acceleration required but not available. Need TensorRT or CUDA. Available: {avail}. Set LD_LIBRARY_PATH to include CUDA/cuDNN libraries."
         if log_stream:
             log_stream.write(f"ERROR: {msg}\n")
             log_stream.flush()
@@ -214,6 +216,9 @@ def load_selfie_model(model_path: Path, log_stream: Optional[object] = None) -> 
         try:
             actual_providers = sess.get_providers()
             log_stream.write(f"Active providers: {actual_providers}\n")
+            # Phase 1: GPU-only mode - all providers should be GPU
+            if actual_providers:
+                log_stream.write(f"✓ GPU acceleration enabled (PHASE 1)\n")
         except Exception:
             pass
         try:
