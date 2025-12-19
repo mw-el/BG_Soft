@@ -449,10 +449,12 @@ def encode_video(
     use_nvenc: bool = True,
     threads: int = 8,
     use_hwaccel: bool = True,  # currently unused; placeholder for symmetry/debug
+    metadata: Optional[dict] = None,
 ) -> None:
     """
     Encode RGB frames via ffmpeg (video-only), then mux audio if provided.
     This avoids pipe issues and keeps durations consistent.
+    Metadata dict is embedded in the output file.
     """
     out_path = out_path.resolve()
     tmp_video = out_path.with_suffix(".video_only.mp4")
@@ -519,6 +521,11 @@ def encode_video(
             "-pix_fmt",
             "yuv420p",
         ]
+    # Add metadata if provided
+    if metadata:
+        for key, value in metadata.items():
+            cmd_video.extend(["-metadata", f"{key}={value}"])
+
     cmd_video += [
         "-y",
         str(tmp_video),
@@ -576,6 +583,12 @@ def encode_video(
             "-c:a",
             "copy",
             "-shortest",
+        ]
+        # Add metadata to mux command as well
+        if metadata:
+            for key, value in metadata.items():
+                cmd_mux.extend(["-metadata", f"{key}={value}"])
+        cmd_mux += [
             "-y",
             str(out_path),
         ]
@@ -603,6 +616,35 @@ def encode_video(
     else:
         # No audio, move video-only to final path
         tmp_video.replace(out_path)
+
+
+def _build_metadata_dict(
+    model_path: Path,
+    blur_background: int,
+    mask_expansion: int,
+    feather: float,
+    smooth_contour: float,
+    transparency_threshold: float,
+    extra_rotation_ccw: int = 0,
+) -> dict:
+    """Build metadata dict from render settings for embedding in video file."""
+    import datetime
+
+    metadata = {
+        "title": "BG-Soft Rendered",
+        "comment": "Rendered with BG-Soft local ONNX renderer",
+        "creation_time": datetime.datetime.now().isoformat(),
+        "bgsoft_model": model_path.name,
+        "bgsoft_blur_background": str(blur_background),
+        "bgsoft_mask_expansion": str(mask_expansion),
+        "bgsoft_feather": f"{feather:.4f}",
+        "bgsoft_smooth_contour": f"{smooth_contour:.4f}",
+        "bgsoft_transparency_threshold": f"{transparency_threshold:.4f}",
+    }
+    if extra_rotation_ccw:
+        metadata["bgsoft_extra_rotation_ccw"] = str(extra_rotation_ccw)
+
+    return metadata
 
 
 def render_local(
@@ -725,6 +767,17 @@ def render_local(
             log_file.flush()
 
         try:
+            # Build metadata from render settings
+            metadata = _build_metadata_dict(
+                model_path=model_path,
+                blur_background=blur_background,
+                mask_expansion=mask_expansion,
+                feather=feather,
+                smooth_contour=smooth_contour,
+                transparency_threshold=threshold,
+                extra_rotation_ccw=extra_rotation_ccw,
+            )
+
             encode_video(
                 frames=frame_iter(),
                 out_path=output_video,
@@ -736,6 +789,7 @@ def render_local(
                 log_stream=log_file,
                 threads=8,
                 use_hwaccel=True,
+                metadata=metadata,
             )
         except Exception as exc:  # noqa: BLE001
             log_file.write(f"Render failed: {exc}\n")
