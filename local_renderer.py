@@ -430,8 +430,8 @@ def composite(frame: np.ndarray, mask: np.ndarray, blur_background: int = 0) -> 
 
 
 def _ffmpeg_loglevel() -> str:
-    level = os.environ.get("BGSOFT_FFMPEG_LOGLEVEL", "info").strip()
-    return level if level else "info"
+    level = os.environ.get("BGSOFT_FFMPEG_LOGLEVEL", "warning").strip()
+    return level if level else "warning"
 
 
 def _build_ffmpeg_report_path(base_path: Path, stage: str) -> Path:
@@ -440,9 +440,9 @@ def _build_ffmpeg_report_path(base_path: Path, stage: str) -> Path:
     return base_path.with_name(f"{base_path.stem}_ffmpeg_{safe_stage}_{stamp}.log")
 
 
-def _ffmpeg_env(report_path: Path, loglevel: str) -> dict:
+def _ffmpeg_env(report_path: Path) -> dict:
     env = os.environ.copy()
-    env["FFREPORT"] = f"file={report_path}:level={loglevel}"
+    env["FFREPORT"] = f"file={report_path}:level=verbose"
     return env
 
 
@@ -473,7 +473,7 @@ def encode_video(
     encode_stage = "encode_nvenc" if use_nvenc else "encode_x264"
     encode_report = _build_ffmpeg_report_path(report_base, encode_stage)
     encode_report.parent.mkdir(parents=True, exist_ok=True)
-    encode_env = _ffmpeg_env(encode_report, loglevel)
+    encode_env = _ffmpeg_env(encode_report)
     if log_stream:
         log_stream.write(f"FFmpeg report ({encode_stage}): {encode_report}\n")
         log_stream.flush()
@@ -600,7 +600,7 @@ def encode_video(
     if audio_source:
         mux_report = _build_ffmpeg_report_path(report_base, "mux")
         mux_report.parent.mkdir(parents=True, exist_ok=True)
-        mux_env = _ffmpeg_env(mux_report, loglevel)
+        mux_env = _ffmpeg_env(mux_report)
         if log_stream:
             log_stream.write(f"FFmpeg report (mux): {mux_report}\n")
             log_stream.flush()
