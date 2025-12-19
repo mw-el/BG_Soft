@@ -27,6 +27,16 @@ import numpy as np
 import onnxruntime as ort
 from PIL import Image, ImageFilter
 
+# Phase 3: GPU acceleration support
+try:
+    import cupy as cp
+    from cupyx.scipy import ndimage as gpu_ndimage
+    GPU_AVAILABLE = True
+except ImportError:
+    GPU_AVAILABLE = False
+    cp = None
+    gpu_ndimage = None
+
 
 NVENC_LOCK = threading.Lock()
 RENDER_LOCK = threading.Lock()
@@ -375,6 +385,92 @@ def run_selfie_mask(session: ort.InferenceSession, frame: np.ndarray, log_stream
     return mask
 
 
+# Phase 3: GPU-accelerated mask filtering and compositing
+def apply_mask_filters_gpu(
+    mask: np.ndarray,
+    threshold: float,
+    smooth_contour: float,
+    mask_expansion: int,
+    feather: float = 0.0,
+) -> np.ndarray:
+    """GPU-accelerated mask filtering using CuPy (Phase 3)."""
+    if not GPU_AVAILABLE or cp is None:
+        return None  # Fall back to CPU
+
+    try:
+        # Transfer to GPU
+        mask_gpu = cp.asarray(mask, dtype=cp.float32)
+        mask_gpu = cp.squeeze(mask_gpu)
+
+        # Soft threshold on GPU
+        if threshold > 0:
+            t_low = max(0.0, threshold - 0.1)
+            t_high = min(1.0, threshold + 0.1)
+            mask_gpu = (mask_gpu - t_low) / max(1e-6, (t_high - t_low))
+            mask_gpu = cp.clip(mask_gpu, 0.0, 1.0)
+
+        # Mask expansion using GPU filters (dilate/erode via Gaussian approximation)
+        if mask_expansion != 0:
+            sigma = abs(mask_expansion) * 0.5
+            if sigma > 0:
+                if mask_expansion > 0:
+                    # Dilate: blur then threshold
+                    mask_gpu = gpu_ndimage.gaussian_filter(mask_gpu, sigma=sigma)
+                else:
+                    # Erode: inverse blur
+                    mask_gpu = 1.0 - gpu_ndimage.gaussian_filter(1.0 - mask_gpu, sigma=sigma)
+
+        # Smooth contour (GPU Gaussian blur)
+        if smooth_contour > 0:
+            sigma = max(0.1, smooth_contour * 0.5)
+            mask_gpu = gpu_ndimage.gaussian_filter(mask_gpu, sigma=sigma)
+
+        # Feather (additional GPU blur)
+        if feather > 0:
+            mask_gpu = gpu_ndimage.gaussian_filter(mask_gpu, sigma=feather / 2.0)
+
+        mask_gpu = cp.clip(mask_gpu, 0.0, 1.0)
+
+        # Transfer back to CPU
+        return cp.asnumpy(mask_gpu).astype(np.float32)
+
+    except Exception as e:
+        # GPU operation failed, fall back to CPU
+        return None
+
+
+def composite_gpu(frame: np.ndarray, mask: np.ndarray, blur_background: int = 0) -> Optional[np.ndarray]:
+    """GPU-accelerated compositing using CuPy (Phase 3)."""
+    if not GPU_AVAILABLE or cp is None:
+        return None  # Fall back to CPU
+
+    try:
+        # Transfer to GPU
+        frame_gpu = cp.asarray(frame, dtype=cp.float32)
+        mask_gpu = cp.asarray(mask, dtype=cp.float32)
+
+        # Prepare alpha
+        alpha_gpu = cp.squeeze(mask_gpu)
+        alpha_gpu = alpha_gpu[..., None]
+
+        # Process background
+        if blur_background and blur_background > 0:
+            bg_gpu = gpu_ndimage.gaussian_filter(frame_gpu, sigma=blur_background / 2.0, axes=(0, 1))
+        else:
+            bg_gpu = cp.zeros_like(frame_gpu)
+
+        # Composite on GPU
+        comp_gpu = frame_gpu * alpha_gpu + bg_gpu * (1.0 - alpha_gpu)
+        comp_gpu = cp.clip(comp_gpu, 0, 255).astype(cp.uint8)
+
+        # Transfer back to CPU
+        return cp.asnumpy(comp_gpu)
+
+    except Exception as e:
+        # GPU operation failed, fall back to CPU
+        return None
+
+
 def apply_mask_filters(
     mask: np.ndarray,
     threshold: float,
@@ -382,7 +478,13 @@ def apply_mask_filters(
     mask_expansion: int,
     feather: float = 0.0,
 ) -> np.ndarray:
-    """Apply threshold/expansion/blur to mask."""
+    """Apply threshold/expansion/blur to mask (Phase 3: GPU-accelerated)."""
+    # Try GPU first (Phase 3)
+    gpu_result = apply_mask_filters_gpu(mask, threshold, smooth_contour, mask_expansion, feather)
+    if gpu_result is not None:
+        return gpu_result
+
+    # Fall back to CPU
     mask = np.squeeze(mask)
     if mask.ndim == 0:
         mask = np.array([mask], dtype=np.float32)
@@ -418,7 +520,13 @@ def apply_mask_filters(
 
 
 def composite(frame: np.ndarray, mask: np.ndarray, blur_background: int = 0) -> np.ndarray:
-    """Apply mask to frame over black or blurred background."""
+    """Apply mask to frame over black or blurred background (Phase 3: GPU-accelerated)."""
+    # Try GPU first (Phase 3)
+    gpu_result = composite_gpu(frame, mask, blur_background)
+    if gpu_result is not None:
+        return gpu_result
+
+    # Fall back to CPU
     alpha = np.squeeze(mask)
     alpha = alpha[..., None]
 
