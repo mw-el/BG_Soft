@@ -823,11 +823,15 @@ class RenderWorker(QtCore.QThread):
                 # Parse frames processed - get the LAST occurrence (most recent)
                 lines = content.split("\n")
                 for line in reversed(lines):
-                    if "Frames processed:" in line:
+                    if "frames processed" in line:
                         try:
-                            frames_processed = int(line.split("Frames processed:")[-1].strip())
-                            last_progress_update = time.time()
-                            break
+                            # Match both "Progress: X frames processed" and "Frames processed: X"
+                            import re
+                            match = re.search(r'(\d+)\s+frames processed', line)
+                            if match:
+                                frames_processed = int(match.group(1))
+                                last_progress_update = time.time()
+                                break
                         except (ValueError, IndexError):
                             pass
 
