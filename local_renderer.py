@@ -674,6 +674,47 @@ def _ffmpeg_env(report_path: Path) -> dict:
     return env
 
 
+def _test_nvenc_quick() -> bool:
+    """Quick NVENC availability check (1 test frame, 1-2 seconds)."""
+    try:
+        cmd = [
+            "ffmpeg",
+            "-hide_banner",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgb24",
+            "-s",
+            "1280x720",
+            "-r",
+            "30",
+            "-i",
+            "pipe:0",
+            "-c:v",
+            "h264_nvenc",
+            "-preset",
+            "p2",
+            "-t",
+            "0.033",
+            "-f",
+            "null",
+            "-",
+        ]
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        test_frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+        proc.stdin.write(test_frame.tobytes())
+        proc.stdin.close()
+        ret = proc.wait(timeout=5)
+        return ret == 0
+    except Exception:
+        return False
+
+
 def encode_video(
     frames: Iterable[np.ndarray],
     out_path: Path,
@@ -1089,6 +1130,8 @@ def _render_local_impl(
     )
     log_file.flush()
 
+    log_file.write("[STAGE] Loading ONNX model...\n")
+    log_file.flush()
     session = load_selfie_model(model_path, log_stream=log_file)
 
     debug_frames = int(os.environ.get("BGSOFT_DEBUG_FRAMES", "2"))
@@ -1101,6 +1144,8 @@ def _render_local_impl(
 
         def frame_iter():
             nonlocal frame_counter
+            log_file.write("[STAGE] Starting decode and inference pipeline...\n")
+            log_file.flush()
             for idx, frame in enumerate(
                 iter_frames(
                     input_video,
@@ -1146,11 +1191,13 @@ def _render_local_impl(
                 yield comp
                 frame_counter += 1
                 if frame_counter % 50 == 0:
-                    log_file.write(f"Frames processed: {frame_counter}\n")
+                    ts = datetime.datetime.now().strftime("%H:%M:%S")
+                    log_file.write(f"[{ts}] Progress: {frame_counter} frames processed\n")
                     log_file.flush()
                 if max_frames and frame_counter >= max_frames:
                     break
-            log_file.write(f"Frames processed: {frame_counter}\n")
+            ts = datetime.datetime.now().strftime("%H:%M:%S")
+            log_file.write(f"[{ts}] Pipeline complete: {frame_counter} frames processed\n")
             log_file.flush()
 
         metadata = _build_metadata_dict(
@@ -1164,6 +1211,8 @@ def _render_local_impl(
         )
 
         frames_iter = frame_iter()
+        log_file.write("[STAGE] Starting video encoding...\n")
+        log_file.flush()
         try:
             encode_video(
                 frames=frames_iter,
@@ -1203,6 +1252,18 @@ def _render_local_impl(
                 nvenc_lock_acquired = False
                 log_file.write("NVENC slot released.\n")
                 log_file.flush()
+
+    # Pre-check NVENC availability to avoid wasted encoding attempts
+    if use_nvenc:
+        log_file.write("Testing NVENC availability (quick 1-frame test)...\n")
+        log_file.flush()
+        if not _test_nvenc_quick():
+            log_file.write("NVENC not available. Using CPU encoding (libx264) instead.\n")
+            log_file.flush()
+            use_nvenc = False
+        else:
+            log_file.write("NVENC available. Proceeding with GPU encoding.\n")
+            log_file.flush()
 
     try:
         try:
