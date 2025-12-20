@@ -243,7 +243,7 @@ def _iter_frames_cuvid(
     ]
     cmd += [
         "-vf",
-        f"scale_cuda={target_width}:{target_height},hwdownload",
+        f"scale_cuda={target_width}:{target_height},hwdownload,format=nv12,format=rgb24",
     ]
     cmd += [
         "-f",
@@ -794,7 +794,7 @@ def encode_video(
             "vbr",
             "-cq",
             "19",
-            "-look-ahead",
+            "-rc-lookahead",
             "20",
             "-b:v",
             "0",
@@ -827,8 +827,15 @@ def encode_video(
             log_stream.flush()
         except Exception:
             pass
-    err_dst = log_stream or subprocess.DEVNULL
-    proc = subprocess.Popen(cmd_video, stdin=subprocess.PIPE, stderr=err_dst, env=encode_env)
+    # CRITICAL: Use DEVNULL for both stdout and stderr to prevent pipe blocking
+    # FFmpeg output is captured via -report flag in encode_env
+    proc = subprocess.Popen(
+        cmd_video,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        env=encode_env
+    )
     if proc.stdin is None:
         raise RuntimeError("ffmpeg stdin not available")
 
