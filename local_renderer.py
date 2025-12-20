@@ -1197,10 +1197,20 @@ def _render_local_impl(
                         pass
                 yield comp
                 frame_counter += 1
+
+                # CRITICAL: Explicitly delete GPU tensors to prevent memory leak
+                del frame, mask_raw, mask, comp
+
                 if frame_counter % 50 == 0:
                     ts = datetime.datetime.now().strftime("%H:%M:%S")
                     log_file.write(f"[{ts}] Progress: {frame_counter} frames processed\n")
                     log_file.flush()
+
+                # Periodic garbage collection to free GPU memory
+                if frame_counter % 100 == 0:
+                    import gc
+                    gc.collect()
+
                 if max_frames and frame_counter >= max_frames:
                     break
             ts = datetime.datetime.now().strftime("%H:%M:%S")
