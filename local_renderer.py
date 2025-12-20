@@ -17,6 +17,7 @@ from __future__ import annotations
 import datetime
 import json
 import os
+import shutil
 import subprocess
 import threading
 from dataclasses import dataclass
@@ -201,14 +202,22 @@ def _iter_frames_cpu(
     target_height: int,
     log_stream: Optional[object],
     threads: int,
+    start_time: Optional[float] = None,
+    max_frames: Optional[int] = None,
 ) -> Generator[np.ndarray, None, None]:
     cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error"]
     cmd += [
         "-i",
         str(path),
+    ]
+    if start_time is not None and start_time > 0:
+        cmd += ["-ss", f"{start_time:.3f}"]
+    cmd += [
         "-threads",
         str(max(1, threads)),
     ]
+    if max_frames is not None and max_frames > 0:
+        cmd += ["-frames:v", str(max_frames)]
     cmd += [
         "-vf",
         f"scale={target_width}:{target_height}",
@@ -229,6 +238,8 @@ def _iter_frames_cuvid(
     target_height: int,
     log_stream: Optional[object],
     threads: int,
+    start_time: Optional[float] = None,
+    max_frames: Optional[int] = None,
 ) -> Generator[np.ndarray, None, None]:
     cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error"]
     cmd += [
@@ -238,9 +249,15 @@ def _iter_frames_cuvid(
         "cuda",
         "-i",
         str(path),
+    ]
+    if start_time is not None and start_time > 0:
+        cmd += ["-ss", f"{start_time:.3f}"]
+    cmd += [
         "-threads",
         str(max(1, threads)),
     ]
+    if max_frames is not None and max_frames > 0:
+        cmd += ["-frames:v", str(max_frames)]
     cmd += [
         "-vf",
         f"scale_cuda={target_width}:{target_height},hwdownload,format=nv12,format=rgb24",
@@ -262,6 +279,8 @@ def iter_frames(
     log_stream: Optional[object] = None,
     threads: int = 8,
     use_hwaccel: bool = True,
+    start_time: Optional[float] = None,
+    max_frames: Optional[int] = None,
 ) -> Generator[np.ndarray, None, None]:
     """Decode frames as RGB via ffmpeg pipe, scaled to target size."""
     # CUDA hwaccel only works with video codecs, not images. Disable for image files.
@@ -293,7 +312,15 @@ def iter_frames(
             except Exception:
                 pass
         try:
-            yield from _iter_frames_cuvid(path, target_width, target_height, log_stream, threads)
+            yield from _iter_frames_cuvid(
+                path,
+                target_width,
+                target_height,
+                log_stream,
+                threads,
+                start_time=start_time,
+                max_frames=max_frames,
+            )
             return
         except Exception as exc:
             if log_stream:
@@ -303,7 +330,15 @@ def iter_frames(
                 except Exception:
                     pass
 
-    yield from _iter_frames_cpu(path, target_width, target_height, log_stream, threads)
+    yield from _iter_frames_cpu(
+        path,
+        target_width,
+        target_height,
+        log_stream,
+        threads,
+        start_time=start_time,
+        max_frames=max_frames,
+    )
 
 
 def load_selfie_model(model_path: Path, log_stream: Optional[object] = None) -> ort.InferenceSession:
@@ -715,30 +750,23 @@ def _test_nvenc_quick() -> bool:
         return False
 
 
-def encode_video(
+def encode_video_only(
     frames: Iterable[np.ndarray],
     out_path: Path,
     width: int,
     height: int,
     fps: float,
-    audio_source: Optional[Path],
     rotate_deg: int = 0,
     log_stream: Optional[object] = None,
     use_nvenc: bool = True,
     threads: int = 8,
-    use_hwaccel: bool = True,  # currently unused; placeholder for symmetry/debug
     metadata: Optional[dict] = None,
-) -> None:
-    """
-    Encode RGB frames via ffmpeg (video-only), then mux audio if provided.
-    This avoids pipe issues and keeps durations consistent.
-    Metadata dict is embedded in the output file.
-    """
+) -> int:
+    """Encode RGB frames via ffmpeg (video-only). Returns written frame count."""
     out_path = out_path.resolve()
-    tmp_video = out_path.with_suffix(".video_only.mp4")
 
     loglevel = _ffmpeg_loglevel()
-    report_base = (audio_source or out_path).resolve()
+    report_base = out_path.resolve()
     encode_stage = "encode_nvenc" if use_nvenc else "encode_x264"
     encode_report = _build_ffmpeg_report_path(report_base, encode_stage)
     encode_report.parent.mkdir(parents=True, exist_ok=True)
@@ -747,7 +775,6 @@ def encode_video(
         log_stream.write(f"FFmpeg report ({encode_stage}): {encode_report}\n")
         log_stream.flush()
 
-    # Step 1: video-only
     vf_filters = []
     if rotate_deg:
         # ffmpeg transpose: 1 = 90° CCW, 2 = 90° CW, 3 = 90° CCW and vertical flip, etc.
@@ -812,14 +839,13 @@ def encode_video(
             "-pix_fmt",
             "yuv420p",
         ]
-    # Add metadata if provided
     if metadata:
         for key, value in metadata.items():
             cmd_video.extend(["-metadata", f"{key}={value}"])
 
     cmd_video += [
         "-y",
-        str(tmp_video),
+        str(out_path),
     ]
     if log_stream:
         try:
@@ -827,8 +853,6 @@ def encode_video(
             log_stream.flush()
         except Exception:
             pass
-    # CRITICAL: Use DEVNULL for both stdout and stderr to prevent pipe blocking
-    # FFmpeg output is captured via -report flag in encode_env
     proc = subprocess.Popen(
         cmd_video,
         stdin=subprocess.PIPE,
@@ -874,56 +898,205 @@ def encode_video(
         if written_frames == 0:
             raise RuntimeError("ffmpeg encode produced 0 frames")
 
-    # Step 2: mux audio if available
-    if audio_source:
-        mux_report = _build_ffmpeg_report_path(report_base, "mux")
-        mux_report.parent.mkdir(parents=True, exist_ok=True)
-        mux_env = _ffmpeg_env(mux_report)
+    return written_frames
+
+
+def _mux_audio(
+    video_path: Path,
+    audio_source: Optional[Path],
+    out_path: Path,
+    log_stream: Optional[object],
+    metadata: Optional[dict],
+) -> None:
+    if audio_source is None:
+        video_path.replace(out_path)
+        return
+
+    loglevel = _ffmpeg_loglevel()
+    report_base = (audio_source or out_path).resolve()
+    mux_report = _build_ffmpeg_report_path(report_base, "mux")
+    mux_report.parent.mkdir(parents=True, exist_ok=True)
+    mux_env = _ffmpeg_env(mux_report)
+    if log_stream:
+        log_stream.write(f"FFmpeg report (mux): {mux_report}\n")
+        log_stream.flush()
+
+    cmd_mux = [
+        "ffmpeg",
+        "-hide_banner",
+        "-report",
+        "-loglevel",
+        loglevel,
+        "-i",
+        str(video_path),
+        "-i",
+        str(audio_source),
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0?",
+        "-c:v",
+        "copy",
+        "-c:a",
+        "copy",
+        "-shortest",
+    ]
+    if metadata:
+        for key, value in metadata.items():
+            cmd_mux.extend(["-metadata", f"{key}={value}"])
+    cmd_mux += ["-y", str(out_path)]
+
+    try:
+        mux_proc = subprocess.run(
+            cmd_mux,
+            stdout=log_stream or subprocess.DEVNULL,
+            stderr=log_stream or subprocess.DEVNULL,
+            env=mux_env,
+            timeout=300,
+        )
+        if mux_proc.returncode != 0:
+            raise RuntimeError(f"ffmpeg mux failed with code {mux_proc.returncode}")
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("ffmpeg mux timeout (>5 min)")
+
+    video_path.unlink()
+
+
+def encode_video(
+    frames: Iterable[np.ndarray],
+    out_path: Path,
+    width: int,
+    height: int,
+    fps: float,
+    audio_source: Optional[Path],
+    rotate_deg: int = 0,
+    log_stream: Optional[object] = None,
+    use_nvenc: bool = True,
+    threads: int = 8,
+    use_hwaccel: bool = True,  # currently unused; placeholder for symmetry/debug
+    metadata: Optional[dict] = None,
+) -> None:
+    """
+    Encode RGB frames via ffmpeg (video-only), then mux audio if provided.
+    This avoids pipe issues and keeps durations consistent.
+    Metadata dict is embedded in the output file.
+    """
+    out_path = out_path.resolve()
+    tmp_video = out_path.with_suffix(".video_only.mp4")
+
+    encode_video_only(
+        frames=frames,
+        out_path=tmp_video,
+        width=width,
+        height=height,
+        fps=fps,
+        rotate_deg=rotate_deg,
+        log_stream=log_stream,
+        use_nvenc=use_nvenc,
+        threads=threads,
+        metadata=metadata,
+    )
+
+    _mux_audio(
+        video_path=tmp_video,
+        audio_source=audio_source,
+        out_path=out_path,
+        log_stream=log_stream,
+        metadata=metadata,
+    )
+
+
+def _chunk_dir_for(output_video: Path) -> Path:
+    return output_video.parent / f".{output_video.stem}_chunks"
+
+
+def _chunk_state_path(output_video: Path) -> Path:
+    return output_video.with_suffix(".render_state.json")
+
+
+def _safe_int_env(name: str, default: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def _calc_initial_chunk_frames(width: int, height: int, fps: float) -> int:
+    base_frames = 500  # empirically stable around 1080p@30fps
+    base_pixels = 1920 * 1080
+    fps = fps or 30.0
+    scale = (base_pixels / max(1, width * height)) * (30.0 / fps)
+    return max(1, int(base_frames * scale))
+
+
+def _load_render_state(state_path: Path) -> Optional[dict]:
+    if not state_path.exists():
+        return None
+    try:
+        return json.loads(state_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _write_render_state(state_path: Path, state: dict, log_stream: Optional[object]) -> None:
+    try:
+        state_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    except Exception as exc:
         if log_stream:
-            log_stream.write(f"FFmpeg report (mux): {mux_report}\n")
+            log_stream.write(f"[STATE] Failed to write state file: {exc}\n")
             log_stream.flush()
 
-        cmd_mux = [
-            "ffmpeg",
-            "-hide_banner",
-            "-report",
-            "-loglevel",
-            loglevel,
-            "-i",
-            str(tmp_video),
-            "-i",
-            str(audio_source),
-            "-map",
-            "0:v:0",
-            "-map",
-            "1:a:0?",
-            "-c:v",
-            "copy",
-            "-c:a",
-            "copy",
-            "-shortest",
-        ]
-        if metadata:
-            for key, value in metadata.items():
-                cmd_mux.extend(["-metadata", f"{key}={value}"])
-        cmd_mux += ["-y", str(out_path)]
 
-        try:
-            mux_proc = subprocess.run(
-                cmd_mux,
-                stdout=log_stream or subprocess.DEVNULL,
-                stderr=log_stream or subprocess.DEVNULL,
-                env=mux_env,
-                timeout=300,
-            )
-            if mux_proc.returncode != 0:
-                raise RuntimeError(f"ffmpeg mux failed with code {mux_proc.returncode}")
-        except subprocess.TimeoutExpired:
-            raise RuntimeError("ffmpeg mux timeout (>5 min)")
+def _concat_chunks(chunk_files: list[Path], out_path: Path, log_stream: Optional[object]) -> None:
+    if not chunk_files:
+        raise RuntimeError("No chunk files available for concat")
+    list_path = out_path.with_suffix(".concat.txt")
+    with list_path.open("w", encoding="utf-8") as handle:
+        for chunk in chunk_files:
+            safe_path = str(chunk).replace("'", "'\\''")
+            handle.write(f"file '{safe_path}'\n")
 
-        tmp_video.unlink()
-    else:
-        tmp_video.replace(out_path)
+    loglevel = _ffmpeg_loglevel()
+    concat_report = _build_ffmpeg_report_path(out_path, "concat")
+    concat_report.parent.mkdir(parents=True, exist_ok=True)
+    concat_env = _ffmpeg_env(concat_report)
+    if log_stream:
+        log_stream.write(f"FFmpeg report (concat): {concat_report}\n")
+        log_stream.flush()
+
+    cmd_concat = [
+        "ffmpeg",
+        "-hide_banner",
+        "-report",
+        "-loglevel",
+        loglevel,
+        "-f",
+        "concat",
+        "-safe",
+        "0",
+        "-i",
+        str(list_path),
+        "-c",
+        "copy",
+        "-y",
+        str(out_path),
+    ]
+    proc = subprocess.run(
+        cmd_concat,
+        stdout=log_stream or subprocess.DEVNULL,
+        stderr=log_stream or subprocess.DEVNULL,
+        env=concat_env,
+        timeout=300,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(f"ffmpeg concat failed with code {proc.returncode}")
+    try:
+        list_path.unlink()
+    except Exception:
+        pass
 
 
 def render_preview_frame(
@@ -1050,6 +1223,8 @@ def render_local(
         log_file.write(
             f"Using NVENC: {'yes' if use_nvenc else 'no'}, Threads: {threads}, HWAccel decode: yes (CUVID)\n"
         )
+        chunking_enabled = os.environ.get("BGSOFT_CHUNKING", "1").strip().lower() not in {"0", "false", "no"}
+        log_file.write(f"Chunked processing: {'enabled' if chunking_enabled else 'disabled'}\n")
         log_file.flush()
 
         render_lock_acquired = False
@@ -1125,11 +1300,17 @@ def _render_local_impl(
     target_w = force_width or base_w
     target_h = force_height or base_h
     rotate_out = (probe.rotation_deg + extra_rotation_ccw) % 360
+    fps = probe.fps or 30.0
+    total_frames = None
+    if probe.duration and fps:
+        total_frames = int(round(probe.duration * fps))
 
     log_file.write(
         f"Probe: {probe.width}x{probe.height}, rotation={probe.rotation_deg}, fps={probe.fps}, duration={probe.duration}s\n"
     )
     log_file.write(f"Target: {target_w}x{target_h}, output rotation={rotate_out} (includes manual rotation)\n")
+    if total_frames is not None:
+        log_file.write(f"Estimated total frames: {total_frames}\n")
     log_file.write(
         "BG params: "
         f"threshold={threshold}, smooth_contour={smooth_contour}, mask_expansion={mask_expansion}, "
@@ -1143,76 +1324,97 @@ def _render_local_impl(
 
     debug_frames = int(os.environ.get("BGSOFT_DEBUG_FRAMES", "2"))
     dump_debug = os.environ.get("BGSOFT_DUMP_DEBUG", "").strip() in {"1", "true", "yes", "on"}
+    chunking_enabled = os.environ.get("BGSOFT_CHUNKING", "1").strip().lower() not in {"0", "false", "no"}
+    chunk_reduce_pct = max(1, min(90, _safe_int_env("BGSOFT_CHUNK_REDUCE_PCT", 25)))
+    chunk_min_frames = max(1, _safe_int_env("BGSOFT_CHUNK_MIN_FRAMES", 150))
+    chunk_max_frames = max(chunk_min_frames, _safe_int_env("BGSOFT_CHUNK_MAX_FRAMES", 1500))
+    chunk_override = _safe_int_env("BGSOFT_CHUNK_FRAMES", 0)
+    initial_chunk_frames = _calc_initial_chunk_frames(target_w, target_h, fps)
+    if chunk_override > 0:
+        initial_chunk_frames = chunk_override
+    initial_chunk_frames = max(chunk_min_frames, min(chunk_max_frames, initial_chunk_frames))
+    total_limit = total_frames
+    if max_frames is not None:
+        total_limit = max_frames if total_limit is None else min(total_limit, max_frames)
     frame_counter = 0
 
-    def run_pipeline(use_hw_encoder: bool) -> None:
+    def _frame_iter_for_chunk(start_frame: int, max_chunk_frames: int) -> Generator[np.ndarray, None, None]:
+        nonlocal frame_counter
+        limit_text = f"{max_chunk_frames} frames" if max_chunk_frames > 0 else "full stream"
+        log_file.write(
+            f"[CHUNK] Decode start at frame {start_frame} for up to {limit_text}\n"
+        )
+        log_file.flush()
+        start_time = start_frame / fps if fps else 0.0
+        for idx, frame in enumerate(
+            iter_frames(
+                input_video,
+                target_w,
+                target_h,
+                log_stream=log_file,
+                threads=threads,
+                use_hwaccel=True,
+                start_time=start_time,
+                max_frames=max_chunk_frames,
+            )
+        ):
+            abs_idx = start_frame + idx
+            mask_raw = run_selfie_mask(session, frame, log_stream=log_file if abs_idx < debug_frames else None)
+            mask = apply_mask_filters(
+                mask_raw,
+                threshold=threshold,
+                smooth_contour=smooth_contour,
+                mask_expansion=mask_expansion,
+                feather=feather,
+            )
+            comp = composite(frame, mask, blur_background=blur_background)
+            if abs_idx < debug_frames:
+                try:
+                    import numpy as _np
+
+                    md = float(_np.abs(frame.astype(_np.int16) - comp.astype(_np.int16)).mean())
+                    log_file.write(
+                        f"Debug frame {abs_idx}: mask mean={float(_np.mean(mask)):.4f}, "
+                        f"alpha<0.5={float(_np.mean(mask < 0.5)):.4f}, mean_abs_delta={md:.4f}\n"
+                    )
+                    log_file.flush()
+                    if dump_debug:
+                        from PIL import Image as _Image
+                        import time as _time
+
+                        stamp = int(_time.time())
+                        base = input_video.parent / f"{input_video.stem}_debug_{stamp}_{abs_idx}"
+                        _Image.fromarray(frame, mode="RGB").save(base.with_suffix(".in.png"))
+                        _Image.fromarray((mask * 255.0).clip(0, 255).astype("uint8"), mode="L").save(
+                            base.with_suffix(".mask.png")
+                        )
+                        _Image.fromarray(comp, mode="RGB").save(base.with_suffix(".out.png"))
+                except Exception:
+                    pass
+            yield comp
+            frame_counter = abs_idx + 1
+
+            # CRITICAL: Explicitly delete GPU tensors to prevent memory leak
+            del frame, mask_raw, mask, comp
+
+            if frame_counter % 50 == 0:
+                ts = datetime.datetime.now().strftime("%H:%M:%S")
+                log_file.write(f"[{ts}] Progress: {frame_counter} frames processed\n")
+                log_file.flush()
+
+            # Periodic garbage collection to free GPU memory
+            if frame_counter % 100 == 0:
+                import gc
+                gc.collect()
+
+    def run_pipeline_monolithic(use_hw_encoder: bool) -> None:
         nonlocal frame_counter
         frame_counter = 0
 
         def frame_iter():
-            nonlocal frame_counter
             log_file.write("[STAGE] Starting decode and inference pipeline...\n")
             log_file.flush()
-            for idx, frame in enumerate(
-                iter_frames(
-                    input_video,
-                    target_w,
-                    target_h,
-                    log_stream=log_file,
-                    threads=threads,
-                    use_hwaccel=True,
-                )
-            ):
-                mask_raw = run_selfie_mask(session, frame, log_stream=log_file if idx < debug_frames else None)
-                mask = apply_mask_filters(
-                    mask_raw,
-                    threshold=threshold,
-                    smooth_contour=smooth_contour,
-                    mask_expansion=mask_expansion,
-                    feather=feather,
-                )
-                comp = composite(frame, mask, blur_background=blur_background)
-                if idx < debug_frames:
-                    try:
-                        import numpy as _np
-
-                        md = float(_np.abs(frame.astype(_np.int16) - comp.astype(_np.int16)).mean())
-                        log_file.write(
-                            f"Debug frame {idx}: mask mean={float(_np.mean(mask)):.4f}, "
-                            f"alpha<0.5={float(_np.mean(mask < 0.5)):.4f}, mean_abs_delta={md:.4f}\n"
-                        )
-                        log_file.flush()
-                        if dump_debug:
-                            from PIL import Image as _Image
-                            import time as _time
-
-                            stamp = int(_time.time())
-                            base = input_video.parent / f"{input_video.stem}_debug_{stamp}_{idx}"
-                            _Image.fromarray(frame, mode="RGB").save(base.with_suffix(".in.png"))
-                            _Image.fromarray((mask * 255.0).clip(0, 255).astype("uint8"), mode="L").save(
-                                base.with_suffix(".mask.png")
-                            )
-                            _Image.fromarray(comp, mode="RGB").save(base.with_suffix(".out.png"))
-                    except Exception:
-                        pass
-                yield comp
-                frame_counter += 1
-
-                # CRITICAL: Explicitly delete GPU tensors to prevent memory leak
-                del frame, mask_raw, mask, comp
-
-                if frame_counter % 50 == 0:
-                    ts = datetime.datetime.now().strftime("%H:%M:%S")
-                    log_file.write(f"[{ts}] Progress: {frame_counter} frames processed\n")
-                    log_file.flush()
-
-                # Periodic garbage collection to free GPU memory
-                if frame_counter % 100 == 0:
-                    import gc
-                    gc.collect()
-
-                if max_frames and frame_counter >= max_frames:
-                    break
+            yield from _frame_iter_for_chunk(0, max_frames or (total_frames or 0) or 0)
             ts = datetime.datetime.now().strftime("%H:%M:%S")
             log_file.write(f"[{ts}] Pipeline complete: {frame_counter} frames processed\n")
             log_file.flush()
@@ -1236,7 +1438,7 @@ def _render_local_impl(
                 out_path=output_video,
                 width=target_w,
                 height=target_h,
-                fps=probe.fps or 30.0,
+                fps=fps,
                 audio_source=input_video,
                 rotate_deg=rotate_out,
                 log_stream=log_file,
@@ -1249,6 +1451,190 @@ def _render_local_impl(
             close_iter = getattr(frames_iter, "close", None)
             if callable(close_iter):
                 close_iter()
+
+    def run_pipeline_chunked(use_hw_encoder: bool) -> None:
+        nonlocal frame_counter
+        frame_counter = 0
+
+        metadata = _build_metadata_dict(
+            model_path=model_path,
+            blur_background=blur_background,
+            mask_expansion=mask_expansion,
+            feather=feather,
+            smooth_contour=smooth_contour,
+            transparency_threshold=threshold,
+            extra_rotation_ccw=extra_rotation_ccw,
+        )
+
+        chunk_dir = _chunk_dir_for(output_video)
+        state_path = _chunk_state_path(output_video)
+        signature = {
+            "input": str(input_video.resolve()),
+            "input_size": input_video.stat().st_size if input_video.exists() else 0,
+            "input_mtime": input_video.stat().st_mtime if input_video.exists() else 0,
+            "target_w": target_w,
+            "target_h": target_h,
+            "fps": fps,
+            "rotate_out": rotate_out,
+        }
+
+        start_frame = 0
+        chunk_frames = initial_chunk_frames
+        chunk_index = 0
+
+        state = _load_render_state(state_path)
+        if state and state.get("signature") == signature:
+            start_frame = int(state.get("last_completed_frame", -1)) + 1
+            chunk_frames = int(state.get("chunk_frames", chunk_frames))
+            chunk_index = int(state.get("next_chunk_index", chunk_index))
+            frame_counter = start_frame
+            log_file.write(
+                f"[STATE] Resuming from frame {start_frame} with chunk size {chunk_frames}\n"
+            )
+            log_file.flush()
+        else:
+            if state_path.exists():
+                try:
+                    state_path.unlink()
+                except Exception:
+                    pass
+            if chunk_dir.exists():
+                try:
+                    shutil.rmtree(chunk_dir)
+                except Exception:
+                    pass
+
+        chunk_dir.mkdir(parents=True, exist_ok=True)
+
+        log_file.write(
+            f"[CHUNK] Initial chunk size: {chunk_frames} (min={chunk_min_frames}, max={chunk_max_frames}, reduce={chunk_reduce_pct}%)\n"
+        )
+        log_file.write(f"[CHUNK] State file: {state_path}\n")
+        log_file.write(f"[CHUNK] Chunk dir: {chunk_dir}\n")
+        log_file.flush()
+
+        while True:
+            remaining = None
+            if total_limit is not None:
+                remaining = total_limit - start_frame
+                if remaining <= 0:
+                    break
+            target_frames = chunk_frames if remaining is None else min(chunk_frames, remaining)
+            if target_frames <= 0:
+                break
+
+            chunk_tmp = chunk_dir / f"chunk_{chunk_index:05d}.tmp.mp4"
+            chunk_final = chunk_dir / f"chunk_{chunk_index:05d}.mp4"
+
+            log_file.write(
+                f"[CHUNK] Start chunk {chunk_index} at frame {start_frame} for {target_frames} frames\n"
+            )
+            log_file.flush()
+
+            frames_iter = _frame_iter_for_chunk(start_frame, target_frames)
+            written_frames = 0
+            try:
+                written_frames = encode_video_only(
+                    frames=frames_iter,
+                    out_path=chunk_tmp,
+                    width=target_w,
+                    height=target_h,
+                    fps=fps,
+                    rotate_deg=rotate_out,
+                    log_stream=log_file,
+                    threads=threads,
+                    use_nvenc=use_hw_encoder,
+                    metadata=None,
+                )
+                if (
+                    written_frames < target_frames
+                    and total_limit is not None
+                    and (start_frame + written_frames) < total_limit
+                ):
+                    raise RuntimeError(
+                        f"Chunk ended early at {written_frames}/{target_frames} frames"
+                    )
+                chunk_tmp.replace(chunk_final)
+            except Exception as exc:
+                log_file.write(f"[CHUNK] Failure on chunk {chunk_index}: {exc}\n")
+                log_file.flush()
+                try:
+                    if chunk_tmp.exists():
+                        chunk_tmp.unlink()
+                except Exception:
+                    pass
+                try:
+                    if chunk_final.exists():
+                        chunk_final.unlink()
+                except Exception:
+                    pass
+                if chunk_frames <= chunk_min_frames:
+                    raise
+                reduced = int(chunk_frames * (100 - chunk_reduce_pct) / 100)
+                chunk_frames = max(chunk_min_frames, reduced)
+                log_file.write(
+                    f"[CHUNK] Reducing chunk size to {chunk_frames} after failure\n"
+                )
+                log_file.flush()
+                continue
+            finally:
+                close_iter = getattr(frames_iter, "close", None)
+                if callable(close_iter):
+                    close_iter()
+
+            log_file.write(
+                f"[CHUNK] Success chunk {chunk_index}: {written_frames} frames\n"
+            )
+            log_file.flush()
+
+            start_frame += written_frames
+            frame_counter = start_frame
+            chunk_index += 1
+
+            _write_render_state(
+                state_path,
+                {
+                    "signature": signature,
+                    "last_completed_frame": start_frame - 1,
+                    "chunk_frames": chunk_frames,
+                    "next_chunk_index": chunk_index,
+                },
+                log_file,
+            )
+
+            if written_frames < target_frames:
+                break
+
+        chunk_files = sorted(chunk_dir.glob("chunk_*.mp4"))
+        if not chunk_files:
+            raise RuntimeError("Chunked render produced no chunks")
+
+        concat_tmp = output_video.with_suffix(".concat_video_only.mp4")
+        _concat_chunks(chunk_files, concat_tmp, log_file)
+        _mux_audio(
+            video_path=concat_tmp,
+            audio_source=input_video,
+            out_path=output_video,
+            log_stream=log_file,
+            metadata=metadata,
+        )
+
+        keep_chunks = os.environ.get("BGSOFT_KEEP_CHUNKS", "").strip().lower() in {"1", "true", "yes", "on"}
+        if not keep_chunks:
+            try:
+                shutil.rmtree(chunk_dir)
+            except Exception:
+                pass
+        try:
+            state_path.unlink()
+        except Exception:
+            pass
+
+    def run_pipeline(use_hw_encoder: bool) -> None:
+        if chunking_enabled:
+            run_pipeline_chunked(use_hw_encoder)
+        else:
+            run_pipeline_monolithic(use_hw_encoder)
 
     nvenc_lock_acquired = False
 

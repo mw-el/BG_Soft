@@ -729,6 +729,7 @@ class RenderWorker(QtCore.QThread):
         self.files = files
         self.local_options = local_options
         self.rotations = rotations or {}
+        self.active_progress_threads: dict = {}
 
     def run(self) -> None:
         successes = 0
@@ -763,13 +764,18 @@ class RenderWorker(QtCore.QThread):
         target.parent.mkdir(parents=True, exist_ok=True)
         rotate_ccw = (self.local_options.extra_rotation_ccw + rotation_ccw) % 360
 
-        # Start progress monitoring thread
+        # Start progress monitoring thread (cleanup old one if exists)
         log_path = video.parent / f"{video.stem}_bgsoft_no_obs.log"
+        video_key = str(video)
+
+        # Note: Old daemon threads will auto-stop when their target completes
+        # We just track the new one
         progress_thread = threading.Thread(
             target=self._monitor_progress,
-            args=(str(video), log_path),
+            args=(video_key, log_path),
             daemon=True,
         )
+        self.active_progress_threads[video_key] = progress_thread
         progress_thread.start()
 
         try:
@@ -1344,6 +1350,7 @@ class MainWindow(QtWidgets.QWidget):
         self.worker: Optional[RenderWorker] = None
         self.thumbnail_workers: List[ThumbnailWorker] = []
         self.settings_dialog: Optional[SettingsDialog] = None
+        self.active_progress_threads: dict = {}  # {video_path: thread} - Track progress monitoring threads
 
         # Load local renderer settings
         self.local_settings = _build_local_settings_from_file()
@@ -1419,30 +1426,42 @@ class MainWindow(QtWidgets.QWidget):
         self.file_table.set_thumbnail(pathlib.Path(path_str), pix, rotation)
 
     def start_batch(self) -> None:
-        if self.worker is not None and self.worker.isRunning():
-            return
-
-        files = self.file_table.get_all_paths()
-        if not files:
-            QtWidgets.QMessageBox.warning(self, "Keine Dateien", "Bitte zuerst mindestens eine Datei hinzufügen.")
-            return
-
-        self.log.appendPlainText("Starte Batch – Renderer: lokal (ONNX)")
-
-        rotations = self.file_table.get_rotations()
-        self.worker = RenderWorker(
-            files,
-            self.local_settings,
-            rotations,
-        )
-        self.worker.file_started.connect(self.on_file_started)
-        self.worker.file_progress.connect(self.on_file_progress)
-        self.worker.file_finished.connect(self.on_file_finished)
-        self.worker.file_failed.connect(self.on_file_failed)
-        self.worker.batch_completed.connect(self.on_batch_completed)
+        # CRITICAL: Disable button immediately to prevent race condition
         self.start_btn.setEnabled(False)
-        self.log.clear()
-        self.worker.start()
+
+        try:
+            # Defensive check: worker already running?
+            if self.worker is not None and self.worker.isRunning():
+                self.log.appendPlainText("⚠️ Worker läuft bereits - ignoriere Start")
+                return
+
+            files = self.file_table.get_all_paths()
+            if not files:
+                QtWidgets.QMessageBox.warning(self, "Keine Dateien", "Bitte zuerst mindestens eine Datei hinzufügen.")
+                self.start_btn.setEnabled(True)  # Re-enable on error
+                return
+
+            self.log.appendPlainText("Starte Batch – Renderer: lokal (ONNX)")
+
+            rotations = self.file_table.get_rotations()
+            self.worker = RenderWorker(
+                files,
+                self.local_settings,
+                rotations,
+            )
+            self.worker.file_started.connect(self.on_file_started)
+            self.worker.file_progress.connect(self.on_file_progress)
+            self.worker.file_finished.connect(self.on_file_finished)
+            self.worker.file_failed.connect(self.on_file_failed)
+            self.worker.batch_completed.connect(self.on_batch_completed)
+            self.log.clear()
+            self.worker.start()
+
+        except Exception as e:
+            # Re-enable button on error
+            self.start_btn.setEnabled(True)
+            self.log.appendPlainText(f"❌ Fehler beim Start: {e}")
+            raise
 
     def on_file_started(self, path: str) -> None:
         video = pathlib.Path(path)
@@ -1459,18 +1478,38 @@ class MainWindow(QtWidgets.QWidget):
         self.file_table.set_output(video, pathlib.Path(output))
         self.log.appendPlainText(f"Fertig: {video} -> {output}")
 
+        # Cleanup progress thread reference
+        if self.worker is not None and path in getattr(self.worker, "active_progress_threads", {}):
+            del self.worker.active_progress_threads[path]
+        if path in self.active_progress_threads:
+            del self.active_progress_threads[path]
+
     def on_file_failed(self, path: str, error: str) -> None:
         video = pathlib.Path(path)
         self.file_table.set_status(video, "Fehler")
         self.file_table.set_output(video, None)
         self.log.appendPlainText(f"Fehler bei {video}: {error}")
+        if self.worker is not None and path in getattr(self.worker, "active_progress_threads", {}):
+            del self.worker.active_progress_threads[path]
+        if path in self.active_progress_threads:
+            del self.active_progress_threads[path]
 
     def on_batch_completed(self, successes: int, failures: int) -> None:
+        # Cleanup worker reference
+        if self.worker is not None:
+            self.worker.deleteLater()  # Qt cleanup
+            self.worker = None
+
+        # Re-enable start button
         self.start_btn.setEnabled(True)
+
+        # Clear all progress thread references (daemon threads auto-stop)
+        self.active_progress_threads.clear()
+
+        # Show summary
         summary = f"Batch abgeschlossen – {successes} erfolgreich, {failures} fehlgeschlagen."
         self.log.appendPlainText(summary)
         QtWidgets.QMessageBox.information(self, "Batch fertig", summary)
-        self.worker = None
 
     def open_selected_output(self) -> None:
         path = self.file_table.selected_output_path()
