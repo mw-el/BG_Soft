@@ -101,47 +101,51 @@ def effective_dimensions(width: int, height: int, rotation_deg: int) -> Tuple[in
     return width, height
 
 
-def iter_frames(
-    path: Path,
+_FFMPEG_HWACCELS: Optional[set[str]] = None
+_FFMPEG_HWACCELS_LOCK = threading.Lock()
+
+
+def _ffmpeg_hwaccels(log_stream: Optional[object] = None) -> set[str]:
+    global _FFMPEG_HWACCELS
+    if _FFMPEG_HWACCELS is not None:
+        return _FFMPEG_HWACCELS
+    with _FFMPEG_HWACCELS_LOCK:
+        if _FFMPEG_HWACCELS is not None:
+            return _FFMPEG_HWACCELS
+        try:
+            out = subprocess.check_output(
+                ["ffmpeg", "-hide_banner", "-hwaccels"],
+                stderr=subprocess.STDOUT,
+            )
+        except Exception as exc:
+            if log_stream:
+                try:
+                    log_stream.write(f"FFmpeg hwaccel probe failed: {exc}\n")
+                    log_stream.flush()
+                except Exception:
+                    pass
+            _FFMPEG_HWACCELS = set()
+            return _FFMPEG_HWACCELS
+        accels: set[str] = set()
+        for line in out.decode("utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if not line or line.lower().startswith("hardware acceleration"):
+                continue
+            accels.add(line.split()[0])
+        _FFMPEG_HWACCELS = accels
+        return _FFMPEG_HWACCELS
+
+
+def _iter_frames_from_cmd(
+    cmd: list[str],
     target_width: int,
     target_height: int,
-    log_stream: Optional[object] = None,
-    threads: int = 8,
-    use_hwaccel: bool = True,
+    log_stream: Optional[object],
+    stage: str,
 ) -> Generator[np.ndarray, None, None]:
-    """Decode frames as RGB via ffmpeg pipe, scaled to target size."""
-    # CUDA hwaccel only works with video codecs, not images. Disable for image files.
-    if use_hwaccel and path.suffix.lower() in {'.png', '.jpg', '.jpeg', '.bmp', '.gif', '.tiff'}:
-        if log_stream:
-            try:
-                log_stream.write(f"Image file detected ({path.suffix}). Disabling CUDA hwaccel for image decoding.\n")
-                log_stream.flush()
-            except Exception:
-                pass
-        use_hwaccel = False
-
-    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error"]
-    cmd += [
-        "-i",
-        str(path),
-        "-threads",
-        str(max(1, threads)),
-    ]
-    # CPU-only decoding with scaling - simple, reliable, guaranteed to work
-    cmd += [
-        "-vf",
-        f"scale={target_width}:{target_height}",
-    ]
-    cmd += [
-        "-f",
-        "rawvideo",
-        "-pix_fmt",
-        "rgb24",
-        "pipe:1",
-    ]
     if log_stream:
         try:
-            log_stream.write("FFmpeg decode cmd: " + " ".join(cmd) + "\n")
+            log_stream.write(f"FFmpeg {stage} cmd: " + " ".join(cmd) + "\n")
             log_stream.flush()
         except Exception:
             pass
@@ -189,6 +193,117 @@ def iter_frames(
                 raise RuntimeError(f"ffmpeg decode failed with code {proc.returncode}")
             if yielded == 0:
                 raise RuntimeError("ffmpeg decode produced 0 frames")
+
+
+def _iter_frames_cpu(
+    path: Path,
+    target_width: int,
+    target_height: int,
+    log_stream: Optional[object],
+    threads: int,
+) -> Generator[np.ndarray, None, None]:
+    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error"]
+    cmd += [
+        "-i",
+        str(path),
+        "-threads",
+        str(max(1, threads)),
+    ]
+    cmd += [
+        "-vf",
+        f"scale={target_width}:{target_height}",
+    ]
+    cmd += [
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "rgb24",
+        "pipe:1",
+    ]
+    yield from _iter_frames_from_cmd(cmd, target_width, target_height, log_stream, "decode_cpu")
+
+
+def _iter_frames_cuvid(
+    path: Path,
+    target_width: int,
+    target_height: int,
+    log_stream: Optional[object],
+    threads: int,
+) -> Generator[np.ndarray, None, None]:
+    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error"]
+    cmd += [
+        "-hwaccel",
+        "cuda",
+        "-hwaccel_output_format",
+        "cuda",
+        "-i",
+        str(path),
+        "-threads",
+        str(max(1, threads)),
+    ]
+    cmd += [
+        "-vf",
+        f"scale_cuda={target_width}:{target_height},hwdownload",
+    ]
+    cmd += [
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "rgb24",
+        "pipe:1",
+    ]
+    yield from _iter_frames_from_cmd(cmd, target_width, target_height, log_stream, "decode_cuvid")
+
+
+def iter_frames(
+    path: Path,
+    target_width: int,
+    target_height: int,
+    log_stream: Optional[object] = None,
+    threads: int = 8,
+    use_hwaccel: bool = True,
+) -> Generator[np.ndarray, None, None]:
+    """Decode frames as RGB via ffmpeg pipe, scaled to target size."""
+    # CUDA hwaccel only works with video codecs, not images. Disable for image files.
+    if use_hwaccel and path.suffix.lower() in {'.png', '.jpg', '.jpeg', '.bmp', '.gif', '.tiff'}:
+        if log_stream:
+            try:
+                log_stream.write(f"Image file detected ({path.suffix}). Disabling CUDA hwaccel for image decoding.\n")
+                log_stream.flush()
+            except Exception:
+                pass
+        use_hwaccel = False
+
+    if use_hwaccel:
+        accels = _ffmpeg_hwaccels(log_stream)
+        if "cuda" not in accels:
+            if log_stream:
+                try:
+                    log_stream.write("FFmpeg build has no CUDA hwaccel. Using CPU decode.\n")
+                    log_stream.flush()
+                except Exception:
+                    pass
+            use_hwaccel = False
+
+    if use_hwaccel:
+        if log_stream:
+            try:
+                log_stream.write("Attempting CUVID GPU decode...\n")
+                log_stream.flush()
+            except Exception:
+                pass
+        try:
+            yield from _iter_frames_cuvid(path, target_width, target_height, log_stream, threads)
+            return
+        except Exception as exc:
+            if log_stream:
+                try:
+                    log_stream.write(f"CUVID failed: {exc}. Falling back to CPU.\n")
+                    log_stream.flush()
+                except Exception:
+                    pass
+
+    yield from _iter_frames_cpu(path, target_width, target_height, log_stream, threads)
 
 
 def load_selfie_model(model_path: Path, log_stream: Optional[object] = None) -> ort.InferenceSession:
@@ -629,7 +744,7 @@ def encode_video(
             "-c:v",
             "h264_nvenc",
             "-preset",
-            "p4",
+            "p2",
             "-tune",
             "hq",
             "-profile:v",
@@ -638,6 +753,8 @@ def encode_video(
             "vbr",
             "-cq",
             "19",
+            "-look-ahead",
+            "20",
             "-b:v",
             "0",
             "-pix_fmt",
@@ -883,7 +1000,7 @@ def render_local(
         log_file.write(f"Input: {input_video}\nOutput: {output_video}\nModel: {model_path}\n")
         log_file.write(f"Settings file: {settings_path}\nExtra rotation CCW: {extra_rotation_ccw}\n")
         log_file.write(
-            f"Using NVENC: {'yes' if use_nvenc else 'no'}, Threads: {threads}, HWAccel decode/scale: no\n"
+            f"Using NVENC: {'yes' if use_nvenc else 'no'}, Threads: {threads}, HWAccel decode: yes (CUVID)\n"
         )
         log_file.flush()
 
@@ -991,7 +1108,7 @@ def _render_local_impl(
                     target_h,
                     log_stream=log_file,
                     threads=threads,
-                    use_hwaccel=False,
+                    use_hwaccel=True,
                 )
             ):
                 mask_raw = run_selfie_mask(session, frame, log_stream=log_file if idx < debug_frames else None)
