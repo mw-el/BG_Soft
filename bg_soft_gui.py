@@ -228,7 +228,6 @@ class ThumbnailWorker(QtCore.QThread):
 class LocalRenderOptions:
     """Settings for the local renderer."""
 
-    enabled: bool = True
     output_subdir: str = "soft_without_obs"
     model_path: pathlib.Path = pathlib.Path("models/selfie_segmentation.onnx")
     settings_path: pathlib.Path = pathlib.Path("settings.json")
@@ -270,7 +269,6 @@ def _build_local_settings_from_file() -> LocalRenderOptions:
     default_threads = os.cpu_count() or 8
 
     return LocalRenderOptions(
-        enabled=local_cfg.get("enabled", defaults.enabled),
         output_subdir=local_cfg.get("output_subdir", defaults.output_subdir),
         model_path=pathlib.Path(local_cfg.get("model_path", defaults.model_path)),
         settings_path=pathlib.Path(local_cfg.get("settings_path", defaults.settings_path)),
@@ -329,9 +327,6 @@ class LocalSettingsWidget(QtWidgets.QGroupBox):
     def __init__(self, defaults: Optional[LocalRenderOptions] = None) -> None:
         super().__init__("Renderoptionen")
         main_layout = QtWidgets.QVBoxLayout(self)
-
-        self.enable_local = QtWidgets.QCheckBox("Lokalen Renderer verwenden (kein OBS)")
-        self.enable_local.setChecked(defaults.enabled if defaults else True)
 
         self.output_subdir = QtWidgets.QLineEdit(defaults.output_subdir if defaults else "soft_without_obs")
 
@@ -469,7 +464,6 @@ class LocalSettingsWidget(QtWidgets.QGroupBox):
         adjustments_layout.addRow("Temperatur", self.temperature)
 
         base_form = QtWidgets.QFormLayout()
-        base_form.addRow(self.enable_local)
         base_form.addRow("Ausgabe-Unterordner", self.output_subdir)
         base_form.addRow("Zusatzrotation", self.rotation)
         base_form.addRow("Dekodierungs-Threads", self.threads)
@@ -493,7 +487,6 @@ class LocalSettingsWidget(QtWidgets.QGroupBox):
         main_layout.addStretch(1)
 
         self.model_select.currentIndexChanged.connect(self._on_model_changed)
-        self.enable_local.stateChanged.connect(self._emit_settings_changed)
         self.rotation.currentIndexChanged.connect(self._emit_settings_changed)
         self.threads.currentIndexChanged.connect(self._emit_settings_changed)
         self.blur_background.valueChanged.connect(self._emit_settings_changed)
@@ -528,7 +521,6 @@ class LocalSettingsWidget(QtWidgets.QGroupBox):
 
     def get_settings(self) -> LocalRenderOptions:
         return LocalRenderOptions(
-            enabled=self.enable_local.isChecked(),
             output_subdir=self.output_subdir.text().strip() or "soft_without_obs",
             model_path=pathlib.Path(self.model_path_display.text().strip() or "models/selfie_segmentation.onnx"),
             extra_rotation_ccw=int(self.rotation.currentData()),
@@ -545,7 +537,6 @@ class LocalSettingsWidget(QtWidgets.QGroupBox):
         )
 
     def set_settings(self, opts: LocalRenderOptions) -> None:
-        self.enable_local.setChecked(opts.enabled)
         self.output_subdir.setText(opts.output_subdir)
         idx_rot = max(0, self.rotation.findData(opts.extra_rotation_ccw))
         self.rotation.setCurrentIndex(idx_rot)
@@ -1133,10 +1124,9 @@ class LoupeLabel(QtWidgets.QLabel):
 
     def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:
         """Track mouse position for loupe."""
-        if self.show_loupe:
-            norm = self._normalized_from_pos(event.pos())
-            if norm is not None:
-                self.loupe_event.emit(norm, False)
+        norm = self._normalized_from_pos(event.pos())
+        if norm is not None:
+            self.loupe_event.emit(norm, False)
         super().mouseMoveEvent(event)
 
     def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:
@@ -1148,8 +1138,7 @@ class LoupeLabel(QtWidgets.QLabel):
 
     def leaveEvent(self, event: QtGui.QEvent) -> None:
         """Hide loupe when mouse leaves."""
-        if not self.show_loupe:
-            self.loupe_event.emit(None, False)
+        self.loupe_event.emit(None, False)
         super().leaveEvent(event)
 
     def _display_rect(self) -> Optional[QtCore.QRect]:
@@ -1270,13 +1259,13 @@ class PreviewPane(QtWidgets.QWidget):
 
         self.loupe_label = LoupeLabel()
         self.loupe_label.setAlignment(QtCore.Qt.AlignCenter)
-        self.loupe_label.setMinimumSize(640, 360)
-        self.loupe_label.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+        self.loupe_label.setMinimumSize(800, 450)
+        self.loupe_label.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Expanding)
         self.loupe_label.setStyleSheet("background-color: #222; color: #888; border: 1px solid #444;")
 
         self.video_widget = QtMultimediaWidgets.QVideoWidget()
-        self.video_widget.setMinimumSize(640, 360)
-        self.video_widget.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+        self.video_widget.setMinimumSize(800, 450)
+        self.video_widget.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Expanding)
 
         self._stack = QtWidgets.QStackedLayout()
         self._stack.addWidget(self.loupe_label)
@@ -1287,8 +1276,10 @@ class PreviewPane(QtWidgets.QWidget):
         layout.setSpacing(4)
         layout.addWidget(self.title)
         layout.addLayout(self._stack, 1)
+        layout.setAlignment(self._stack, QtCore.Qt.AlignHCenter)
 
         self.loupe_label.loupe_event.connect(self.loupe_event)
+        self._aspect_ratio: Optional[float] = None
 
     def set_pixmap(self, pixmap: Optional[QtGui.QPixmap], text: str = "") -> None:
         self.loupe_label.setPixmap(pixmap)
@@ -1300,6 +1291,30 @@ class PreviewPane(QtWidgets.QWidget):
 
     def show_video(self, enabled: bool) -> None:
         self._stack.setCurrentWidget(self.video_widget if enabled else self.loupe_label)
+        self._apply_aspect_ratio()
+
+    def set_aspect_ratio(self, ratio: Optional[float]) -> None:
+        self._aspect_ratio = ratio if ratio and ratio > 0 else None
+        self._apply_aspect_ratio()
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self._apply_aspect_ratio()
+
+    def _apply_aspect_ratio(self) -> None:
+        if not self._aspect_ratio:
+            min_width = self.loupe_label.minimumSize().width()
+            self.loupe_label.setMinimumWidth(min_width)
+            self.loupe_label.setMaximumWidth(16777215)
+            self.video_widget.setMinimumWidth(min_width)
+            self.video_widget.setMaximumWidth(16777215)
+            return
+        current = self._stack.currentWidget()
+        content_height = max(1, current.height())
+        target_width = int(round(content_height * self._aspect_ratio))
+        if abs(current.width() - target_width) > 2:
+            self.loupe_label.setFixedWidth(target_width)
+            self.video_widget.setFixedWidth(target_width)
 
 class FramePreviewWidget(QtWidgets.QWidget):
     """Preview widget showing original and rendered frames with linked loupe."""
@@ -1379,10 +1394,17 @@ class FramePreviewWidget(QtWidgets.QWidget):
                 self._loupe_norm = None
                 self._set_loupe(None, active=False)
                 return
-        if not self._loupe_active:
+        if self._loupe_active:
+            if isinstance(norm, tuple):
+                self._loupe_norm = norm
+                self._set_loupe(norm, active=True)
             return
+
+        if norm is None:
+            self._set_loupe(None, active=False)
+            return
+
         if isinstance(norm, tuple):
-            self._loupe_norm = norm
             self._set_loupe(norm, active=True)
 
     def _set_loupe(self, norm: Optional[tuple[float, float]], active: bool) -> None:
@@ -1400,6 +1422,10 @@ class FramePreviewWidget(QtWidgets.QWidget):
     @property
     def rendered_video_widget(self) -> QtMultimediaWidgets.QVideoWidget:
         return self.rendered_pane.video_widget
+
+    def set_aspect_ratio(self, ratio: Optional[float]) -> None:
+        self.original_pane.set_aspect_ratio(ratio)
+        self.rendered_pane.set_aspect_ratio(ratio)
 
 
 class SettingsDialog(QtWidgets.QDialog):
@@ -1420,7 +1446,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.video_files = video_files or []
 
         self.local_widget = LocalSettingsWidget(local_defaults)
-        self.local_widget.setMaximumWidth(480)
+        self.local_widget.setMaximumWidth(420)
         self.local_widget.settings_changed.connect(self._schedule_preview_update)
 
         self._preview_timer = QtCore.QTimer(self)
@@ -1498,7 +1524,7 @@ class SettingsDialog(QtWidgets.QDialog):
         container_layout.addWidget(self.local_widget)
         container_layout.addStretch()
         scroll.setWidget(container)
-        scroll.setMaximumWidth(520)
+        scroll.setMaximumWidth(460)
 
         preview_controls = QtWidgets.QHBoxLayout()
         preview_controls.addWidget(self.preview_play_btn)
@@ -1582,6 +1608,7 @@ class SettingsDialog(QtWidgets.QDialog):
     def _load_preview_context(self) -> None:
         self._total_frames = 0
         self._fps = 0.0
+        self.preview_widget.set_aspect_ratio(None)
         if not self.video_files:
             self._set_frame_controls_enabled(False)
             self._update_frame_label()
@@ -1592,6 +1619,8 @@ class SettingsDialog(QtWidgets.QDialog):
             self._fps = probe.fps or 30.0
             if probe.duration and self._fps:
                 self._total_frames = int(round(probe.duration * self._fps))
+            if probe.width > 0 and probe.height > 0:
+                self.preview_widget.set_aspect_ratio(probe.width / probe.height)
         except Exception:
             self._total_frames = 0
 
@@ -1805,7 +1834,6 @@ class SettingsDialog(QtWidgets.QDialog):
                     "temperature": local_opts.temperature,
                 },
                 "local_render": {
-                    "enabled": local_opts.enabled,
                     "model_path": str(local_opts.model_path),
                     "output_subdir": local_opts.output_subdir,
                     "extra_rotation_ccw": local_opts.extra_rotation_ccw,
