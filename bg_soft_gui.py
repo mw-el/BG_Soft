@@ -14,7 +14,7 @@ import numpy as np
 from PyQt5 import QtCore, QtGui, QtWidgets
 import onnxruntime as ort
 
-from local_renderer import render_local, render_preview_frame
+from local_renderer import load_selfie_model, probe_video, render_local, render_preview_pair
 from obs_controller import (
     load_settings,
     open_with_system_handler,
@@ -240,6 +240,10 @@ class LocalRenderOptions:
     feather: float = 0.1
     smooth_contour: float = 0.1
     transparency_threshold: float = 0.8
+    brightness: float = 0.0
+    contrast: float = 0.0
+    saturation: float = 0.0
+    temperature: float = 0.0
 
     def resolve_output_dir(self, video: pathlib.Path) -> pathlib.Path:
         """Place renders next to the source, parallel zu 'soft' falls vorhanden."""
@@ -277,11 +281,17 @@ def _build_local_settings_from_file() -> LocalRenderOptions:
         feather=blur_cfg.get("feather", defaults.feather),
         smooth_contour=blur_cfg.get("smooth_contour", defaults.smooth_contour),
         transparency_threshold=blur_cfg.get("transparency_threshold", defaults.transparency_threshold),
+        brightness=blur_cfg.get("brightness", defaults.brightness),
+        contrast=blur_cfg.get("contrast", defaults.contrast),
+        saturation=blur_cfg.get("saturation", defaults.saturation),
+        temperature=blur_cfg.get("temperature", defaults.temperature),
     )
 
 
 class LocalSettingsWidget(QtWidgets.QGroupBox):
     """Controls for the local renderer."""
+
+    settings_changed = QtCore.pyqtSignal()
 
     def __init__(self, defaults: Optional[LocalRenderOptions] = None) -> None:
         super().__init__("Renderoptionen")
@@ -394,6 +404,37 @@ class LocalSettingsWidget(QtWidgets.QGroupBox):
             "Hoch (1.0) = Nur sicherer Vordergrund, weniger Details"
         )
 
+        self.brightness = QtWidgets.QDoubleSpinBox()
+        self.brightness.setRange(-1.0, 1.0)
+        self.brightness.setSingleStep(0.05)
+        self.brightness.setValue(defaults.brightness if defaults else 0.0)
+        self.brightness.setToolTip("Helligkeit anpassen (-1.0 bis +1.0)")
+
+        self.contrast = QtWidgets.QDoubleSpinBox()
+        self.contrast.setRange(-1.0, 1.0)
+        self.contrast.setSingleStep(0.05)
+        self.contrast.setValue(defaults.contrast if defaults else 0.0)
+        self.contrast.setToolTip("Kontrast anpassen (-1.0 bis +1.0)")
+
+        self.saturation = QtWidgets.QDoubleSpinBox()
+        self.saturation.setRange(-1.0, 1.0)
+        self.saturation.setSingleStep(0.05)
+        self.saturation.setValue(defaults.saturation if defaults else 0.0)
+        self.saturation.setToolTip("Sättigung anpassen (-1.0 bis +1.0)")
+
+        self.temperature = QtWidgets.QDoubleSpinBox()
+        self.temperature.setRange(-1.0, 1.0)
+        self.temperature.setSingleStep(0.05)
+        self.temperature.setValue(defaults.temperature if defaults else 0.0)
+        self.temperature.setToolTip("Farbtemperatur anpassen (-1.0 kalt bis +1.0 warm)")
+
+        adjustments_group = QtWidgets.QGroupBox("Bildoptimierung")
+        adjustments_layout = QtWidgets.QFormLayout(adjustments_group)
+        adjustments_layout.addRow("Helligkeit", self.brightness)
+        adjustments_layout.addRow("Kontrast", self.contrast)
+        adjustments_layout.addRow("Sättigung", self.saturation)
+        adjustments_layout.addRow("Temperatur", self.temperature)
+
         form.addRow(self.enable_local)
         form.addRow("Ausgabe-Unterordner", self.output_subdir)
         form.addRow("Zusatzrotation", self.rotation)
@@ -404,8 +445,21 @@ class LocalSettingsWidget(QtWidgets.QGroupBox):
         form.addRow("Feather", self.feather)
         form.addRow("Kontur glätten", self.smooth_contour)
         form.addRow("Transparenz-Grenzwert", self.transparency_threshold)
+        form.addRow(adjustments_group)
 
         self.model_select.currentIndexChanged.connect(self._on_model_changed)
+        self.enable_local.stateChanged.connect(self._emit_settings_changed)
+        self.rotation.currentIndexChanged.connect(self._emit_settings_changed)
+        self.threads.currentIndexChanged.connect(self._emit_settings_changed)
+        self.blur_background.valueChanged.connect(self._emit_settings_changed)
+        self.mask_expansion.valueChanged.connect(self._emit_settings_changed)
+        self.feather.valueChanged.connect(self._emit_settings_changed)
+        self.smooth_contour.valueChanged.connect(self._emit_settings_changed)
+        self.transparency_threshold.valueChanged.connect(self._emit_settings_changed)
+        self.brightness.valueChanged.connect(self._emit_settings_changed)
+        self.contrast.valueChanged.connect(self._emit_settings_changed)
+        self.saturation.valueChanged.connect(self._emit_settings_changed)
+        self.temperature.valueChanged.connect(self._emit_settings_changed)
 
     def _on_model_changed(self) -> None:
         selected_data = self.model_select.currentData()
@@ -422,6 +476,10 @@ class LocalSettingsWidget(QtWidgets.QGroupBox):
                 self.model_path_display.setText(str(self.model_select.currentData()))
         else:
             self.model_path_display.setText(selected_data)
+        self._emit_settings_changed()
+
+    def _emit_settings_changed(self) -> None:
+        self.settings_changed.emit()
 
     def get_settings(self) -> LocalRenderOptions:
         return LocalRenderOptions(
@@ -435,6 +493,10 @@ class LocalSettingsWidget(QtWidgets.QGroupBox):
             feather=float(self.feather.value()),
             smooth_contour=float(self.smooth_contour.value()),
             transparency_threshold=float(self.transparency_threshold.value()),
+            brightness=float(self.brightness.value()),
+            contrast=float(self.contrast.value()),
+            saturation=float(self.saturation.value()),
+            temperature=float(self.temperature.value()),
         )
 
     def set_settings(self, opts: LocalRenderOptions) -> None:
@@ -449,6 +511,10 @@ class LocalSettingsWidget(QtWidgets.QGroupBox):
         self.feather.setValue(opts.feather)
         self.smooth_contour.setValue(opts.smooth_contour)
         self.transparency_threshold.setValue(opts.transparency_threshold)
+        self.brightness.setValue(opts.brightness)
+        self.contrast.setValue(opts.contrast)
+        self.saturation.setValue(opts.saturation)
+        self.temperature.setValue(opts.temperature)
 
         # Set model selector to match current setting
         model_str = str(opts.model_path)
@@ -869,109 +935,61 @@ class RenderWorker(QtCore.QThread):
                 time.sleep(1)
 
 
-class PreviewRenderWorker(QtCore.QThread):
-    """Background worker for rendering preview frames."""
+class PreviewWorker(QtCore.QObject):
+    """Background worker for rendering preview frames in a dedicated thread."""
 
-    preview_ready = QtCore.pyqtSignal(object, object, str)  # Emits (original_pixmap, rendered_pixmap, error_message)
+    preview_ready = QtCore.pyqtSignal(int, object, object, str)  # request_id, original_array, rendered_array, error
 
-    def __init__(self, video_path: pathlib.Path, settings: LocalRenderOptions) -> None:
+    def __init__(self) -> None:
         super().__init__()
-        self.video_path = video_path
-        self.settings = settings
+        self._session: Optional[ort.InferenceSession] = None
+        self._session_model_path: Optional[pathlib.Path] = None
 
-    def run(self) -> None:
-        """Render preview frames in background thread."""
-        original_pixmap = None
-        rendered_pixmap = None
+    @QtCore.pyqtSlot(object, object, int, int)
+    def render_preview(
+        self,
+        video_path: pathlib.Path,
+        settings: LocalRenderOptions,
+        frame_index: int,
+        request_id: int,
+    ) -> None:
+        original = None
+        rendered = None
         error_msg = ""
 
         try:
-            # Validate inputs first
-            if not self.video_path or not self.video_path.exists():
+            if not video_path or not video_path.exists():
                 error_msg = "Videodatei nicht gefunden"
-                self.preview_ready.emit(QtGui.QPixmap(), QtGui.QPixmap(), error_msg)
-                return
-
-            if not self.settings.model_path or not self.settings.model_path.exists():
+            elif not settings.model_path or not settings.model_path.exists():
                 error_msg = "Modell nicht gefunden"
-                self.preview_ready.emit(QtGui.QPixmap(), QtGui.QPixmap(), error_msg)
-                return
-
-            # Load original frame
-            from local_renderer import probe_video, iter_frames
-
-            try:
-                probe = probe_video(self.video_path)
-                if probe.width > 0 and probe.height > 0:
-                    for idx, frame in enumerate(iter_frames(self.video_path, probe.width, probe.height, log_stream=None)):
-                        if idx == 0:
-                            original_pixmap = self._numpy_to_pixmap(frame)
-                            break
-            except Exception as e:
-                # Try to extract useful error message
-                error_str = str(e)
-                if "ffmpeg" in error_str.lower():
-                    error_msg = "FFmpeg Fehler - Video lesbar?"
-                elif "cuda" in error_str.lower():
-                    error_msg = "CUDA nicht verfügbar"
-                else:
-                    error_msg = "Frame konnte nicht geladen werden"
-                pass
-
-            # Render preview frame with current settings
-            try:
-                rendered_array = render_preview_frame(
-                    self.video_path,
-                    self.settings.model_path,
-                    frame_index=0,
-                    blur_background=self.settings.blur_background,
-                    mask_expansion=self.settings.mask_expansion,
-                    feather=self.settings.feather,
-                    smooth_contour=self.settings.smooth_contour,
-                    transparency_threshold=self.settings.transparency_threshold,
+            else:
+                if self._session is None or self._session_model_path != settings.model_path:
+                    self._session = load_selfie_model(settings.model_path)
+                    self._session_model_path = settings.model_path
+                original, rendered = render_preview_pair(
+                    video_path,
+                    settings.model_path,
+                    frame_index=frame_index,
+                    session=self._session,
+                    blur_background=settings.blur_background,
+                    mask_expansion=settings.mask_expansion,
+                    feather=settings.feather,
+                    smooth_contour=settings.smooth_contour,
+                    transparency_threshold=settings.transparency_threshold,
+                    brightness=settings.brightness,
+                    contrast=settings.contrast,
+                    saturation=settings.saturation,
+                    temperature=settings.temperature,
                 )
-                if rendered_array is not None:
-                    rendered_pixmap = self._numpy_to_pixmap(rendered_array)
-                elif not error_msg:
+                if original is None and rendered is None and not error_msg:
+                    error_msg = "Preview konnte nicht geladen werden"
+                elif rendered is None and not error_msg:
                     error_msg = "Rendering fehlgeschlagen"
-            except Exception as e:
-                error_str = str(e)
-                if "model" in error_str.lower() or "onnx" in error_str.lower():
-                    error_msg = "Modell-Fehler: GPU vorhanden?"
-                elif not error_msg:
-                    error_msg = "Rendering-Fehler"
-                pass
-
-        except Exception as e:
-            error_msg = f"Fehler: {str(e)[:30]}"
-
-        # Always emit signal
-        try:
-            self.preview_ready.emit(
-                original_pixmap if original_pixmap else QtGui.QPixmap(),
-                rendered_pixmap if rendered_pixmap else QtGui.QPixmap(),
-                error_msg
-            )
         except Exception:
-            # Last resort - emit empty response
-            self.preview_ready.emit(QtGui.QPixmap(), QtGui.QPixmap(), "Fehler")
+            if not error_msg:
+                error_msg = "Rendering-Fehler"
 
-    @staticmethod
-    def _numpy_to_pixmap(arr: np.ndarray) -> Optional[QtGui.QPixmap]:
-        """Convert RGB numpy array to QPixmap."""
-        try:
-            if arr is None or arr.size == 0:
-                return None
-            h, w, ch = arr.shape
-            if ch != 3:
-                return None
-            # Ensure array is contiguous and make a copy for safety
-            arr_rgb = np.ascontiguousarray(arr.astype(np.uint8))
-            bytes_per_line = 3 * w
-            q_img = QtGui.QImage(arr_rgb.data, w, h, bytes_per_line, QtGui.QImage.Format_RGB888)
-            return QtGui.QPixmap.fromImage(q_img)
-        except Exception:
-            return None
+        self.preview_ready.emit(request_id, original, rendered, error_msg)
 
 
 class LoupeLabel(QtWidgets.QLabel):
@@ -1147,6 +1165,8 @@ class FramePreviewWidget(QtWidgets.QWidget):
 class SettingsDialog(QtWidgets.QDialog):
     """Modal dialog for local renderer settings."""
 
+    preview_request = QtCore.pyqtSignal(object, object, int, int)
+
     def __init__(
         self,
         parent: Optional[QtWidgets.QWidget],
@@ -1159,6 +1179,47 @@ class SettingsDialog(QtWidgets.QDialog):
         self.video_files = video_files or []
 
         self.local_widget = LocalSettingsWidget(local_defaults)
+        self.local_widget.settings_changed.connect(self._schedule_preview_update)
+
+        self._preview_timer = QtCore.QTimer(self)
+        self._preview_timer.setSingleShot(True)
+        self._preview_timer.timeout.connect(self._update_preview)
+        self._preview_request_id = 0
+        self._total_frames = 0
+        self._fps = 0.0
+        self._current_frame = 0
+
+        self._preview_thread = QtCore.QThread(self)
+        self._preview_worker = PreviewWorker()
+        self._preview_worker.moveToThread(self._preview_thread)
+        self.preview_request.connect(self._preview_worker.render_preview)
+        self._preview_worker.preview_ready.connect(self._on_preview_ready)
+        self._preview_thread.start()
+
+        self.preview_widget = FramePreviewWidget()
+        self.preview_status = QtWidgets.QLabel("")
+        self.preview_status.setStyleSheet("color: #999; font-size: 11px; padding: 4px;")
+
+        self.prev_10_btn = QtWidgets.QPushButton("<< -10")
+        self.prev_1_btn = QtWidgets.QPushButton("< -1")
+        self.next_1_btn = QtWidgets.QPushButton("+1 >")
+        self.next_10_btn = QtWidgets.QPushButton("+10 >>")
+        self.prev_10_btn.clicked.connect(lambda: self._step_frames(-10))
+        self.prev_1_btn.clicked.connect(lambda: self._step_frames(-1))
+        self.next_1_btn.clicked.connect(lambda: self._step_frames(1))
+        self.next_10_btn.clicked.connect(lambda: self._step_frames(10))
+
+        self.frame_label = QtWidgets.QLabel("Frame 0 / 0")
+        self.frame_label.setAlignment(QtCore.Qt.AlignCenter)
+
+        self.frame_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.frame_slider.setRange(0, 0)
+        self.frame_slider.setSingleStep(1)
+        self.frame_slider.valueChanged.connect(self._on_frame_slider_changed)
+
+        self.frame_spin = QtWidgets.QSpinBox()
+        self.frame_spin.setRange(0, 0)
+        self.frame_spin.valueChanged.connect(self._on_frame_spin_changed)
 
         # Settings panel
         scroll = QtWidgets.QScrollArea()
@@ -1169,14 +1230,34 @@ class SettingsDialog(QtWidgets.QDialog):
         container_layout.addStretch()
         scroll.setWidget(container)
 
-        # Main content: just settings (preview disabled - causes crashes)
-        content_layout = QtWidgets.QVBoxLayout()
-        content_layout.addWidget(scroll, 1)
+        preview_controls = QtWidgets.QHBoxLayout()
+        preview_controls.addWidget(self.prev_10_btn)
+        preview_controls.addWidget(self.prev_1_btn)
+        preview_controls.addWidget(self.next_1_btn)
+        preview_controls.addWidget(self.next_10_btn)
+        preview_controls.addStretch()
+        preview_controls.addWidget(self.frame_label)
+        preview_controls.addStretch()
+        preview_controls.addWidget(self.preview_status)
 
-        # Note about preview
-        note = QtWidgets.QLabel("💡 Preview wird noch entwickelt...")
-        note.setStyleSheet("color: #999; font-size: 11px; padding: 10px;")
-        content_layout.addWidget(note)
+        slider_layout = QtWidgets.QHBoxLayout()
+        slider_layout.addWidget(self.frame_slider, 1)
+        slider_layout.addWidget(self.frame_spin)
+
+        preview_container = QtWidgets.QWidget()
+        preview_layout = QtWidgets.QVBoxLayout(preview_container)
+        preview_layout.addWidget(self.preview_widget, 1)
+        preview_layout.addLayout(preview_controls)
+        preview_layout.addLayout(slider_layout)
+
+        splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
+        splitter.addWidget(preview_container)
+        splitter.addWidget(scroll)
+        splitter.setStretchFactor(0, 2)
+        splitter.setStretchFactor(1, 3)
+
+        content_layout = QtWidgets.QVBoxLayout()
+        content_layout.addWidget(splitter, 1)
 
         button_layout = QtWidgets.QHBoxLayout()
         save_default_btn = QtWidgets.QPushButton("Als Standard speichern")
@@ -1195,51 +1276,130 @@ class SettingsDialog(QtWidgets.QDialog):
         save_default_btn.clicked.connect(self._save_as_default)
         ok_btn.clicked.connect(self.accept)
         cancel_btn.clicked.connect(self.reject)
-
-        # Note: Preview disabled due to crashes in ONNX/FFmpeg threading
-        # Will be re-enabled once threading issues are resolved
+        self._load_preview_context()
+        self._schedule_preview_update()
 
     def set_values(self, local_opts: LocalRenderOptions) -> None:
         self.local_widget.set_settings(local_opts)
+        self._schedule_preview_update()
+
+    def set_video_files(self, video_files: List[pathlib.Path]) -> None:
+        self.video_files = video_files
+        self._load_preview_context()
+        self._schedule_preview_update()
 
     def get_settings(self) -> LocalRenderOptions:
         """Get current settings from the local widget."""
         return self.local_widget.get_settings()
 
+    def _load_preview_context(self) -> None:
+        self._total_frames = 0
+        self._fps = 0.0
+        if not self.video_files:
+            self._set_frame_controls_enabled(False)
+            self._update_frame_label()
+            return
+
+        try:
+            probe = probe_video(self.video_files[0])
+            self._fps = probe.fps or 30.0
+            if probe.duration and self._fps:
+                self._total_frames = int(round(probe.duration * self._fps))
+        except Exception:
+            self._total_frames = 0
+
+        if self._total_frames <= 0:
+            self._set_frame_controls_enabled(False)
+        else:
+            self._set_frame_controls_enabled(True)
+            if self._current_frame >= self._total_frames:
+                self._current_frame = max(0, self._total_frames - 1)
+        self._sync_frame_controls()
+        self._update_frame_label()
+
+    def _set_frame_controls_enabled(self, enabled: bool) -> None:
+        for widget in (
+            self.prev_10_btn,
+            self.prev_1_btn,
+            self.next_1_btn,
+            self.next_10_btn,
+            self.frame_slider,
+            self.frame_spin,
+        ):
+            widget.setEnabled(enabled)
+
+    def _sync_frame_controls(self) -> None:
+        max_index = max(0, self._total_frames - 1)
+        self.frame_slider.blockSignals(True)
+        self.frame_spin.blockSignals(True)
+        self.frame_slider.setRange(0, max_index)
+        self.frame_spin.setRange(0, max_index)
+        self.frame_slider.setValue(self._current_frame)
+        self.frame_spin.setValue(self._current_frame)
+        self.frame_slider.blockSignals(False)
+        self.frame_spin.blockSignals(False)
+
+    def _update_frame_label(self) -> None:
+        if self._total_frames > 0:
+            seconds = self._current_frame / self._fps if self._fps else 0.0
+            self.frame_label.setText(f"Frame {self._current_frame} / {self._total_frames} ({seconds:.2f}s)")
+        else:
+            self.frame_label.setText("Frame -- / --")
+
+    def _set_current_frame(self, frame_index: int, schedule: bool = True) -> None:
+        if self._total_frames > 0:
+            frame_index = max(0, min(frame_index, self._total_frames - 1))
+        else:
+            frame_index = max(0, frame_index)
+        if frame_index == self._current_frame:
+            return
+        self._current_frame = frame_index
+        self._sync_frame_controls()
+        self._update_frame_label()
+        if schedule:
+            self._schedule_preview_update()
+
+    def _step_frames(self, delta: int) -> None:
+        self._set_current_frame(self._current_frame + delta)
+
+    def _on_frame_slider_changed(self, value: int) -> None:
+        self._set_current_frame(int(value))
+
+    def _on_frame_spin_changed(self, value: int) -> None:
+        self._set_current_frame(int(value))
+
     def _schedule_preview_update(self) -> None:
         """Schedule preview update with debouncing (avoid excessive renders)."""
-        # Cancel previous timer if any
-        if self._preview_timer:
+        if self._preview_timer.isActive():
             self._preview_timer.stop()
-
-        # Schedule new update after 500ms of no changes
-        self._preview_timer = QtCore.QTimer()
-        self._preview_timer.setSingleShot(True)
-        self._preview_timer.timeout.connect(self._update_preview)
-        self._preview_timer.start(500)
+        self._preview_timer.start(300)
 
     def _update_preview(self) -> None:
         """Update preview frames based on current settings (non-blocking)."""
         if not self.video_files:
             # No video files available
             self.preview_widget.set_frames(None, None, error="Keine Videos ausgewählt")
+            self.preview_status.setText("Keine Videos ausgewählt")
             return
 
-        # Run preview rendering in background to avoid blocking UI
-        try:
-            worker = PreviewRenderWorker(self.video_files[0], self.get_settings())
-            worker.preview_ready.connect(self._on_preview_ready)
-            worker.start()
-        except Exception as e:
-            # On error, show error message
-            self.preview_widget.set_frames(None, None, error=f"Fehler: {str(e)[:40]}")
+        self._preview_request_id += 1
+        self.preview_status.setText("Rendering...")
+        self.preview_request.emit(self.video_files[0], self.get_settings(), self._current_frame, self._preview_request_id)
 
-    def _on_preview_ready(self, original_pixmap: object, rendered_pixmap: object, error_msg: str = "") -> None:
+    def _on_preview_ready(
+        self,
+        request_id: int,
+        original_frame: object,
+        rendered_frame: object,
+        error_msg: str = "",
+    ) -> None:
         """Handle preview render completion."""
-        # Convert from signal (which sends object type)
-        orig = original_pixmap if isinstance(original_pixmap, QtGui.QPixmap) and not original_pixmap.isNull() else None
-        rend = rendered_pixmap if isinstance(rendered_pixmap, QtGui.QPixmap) and not rendered_pixmap.isNull() else None
+        if request_id != self._preview_request_id:
+            return
+        orig = self._numpy_to_pixmap(original_frame) if isinstance(original_frame, np.ndarray) else None
+        rend = self._numpy_to_pixmap(rendered_frame) if isinstance(rendered_frame, np.ndarray) else None
         self.preview_widget.set_frames(orig, rend, error=error_msg if error_msg else None)
+        self.preview_status.setText(error_msg if error_msg else "Fertig")
 
     @staticmethod
     def _numpy_to_pixmap(arr: np.ndarray) -> Optional[QtGui.QPixmap]:
@@ -1270,6 +1430,10 @@ class SettingsDialog(QtWidgets.QDialog):
                     "feather": local_opts.feather,
                     "smooth_contour": local_opts.smooth_contour,
                     "transparency_threshold": local_opts.transparency_threshold,
+                    "brightness": local_opts.brightness,
+                    "contrast": local_opts.contrast,
+                    "saturation": local_opts.saturation,
+                    "temperature": local_opts.temperature,
                 },
                 "local_render": {
                     "enabled": local_opts.enabled,
@@ -1390,8 +1554,7 @@ class MainWindow(QtWidgets.QWidget):
             )
         else:
             self.settings_dialog.set_values(self.local_settings)
-            self.settings_dialog.video_files = video_files
-            self.settings_dialog._update_preview()
+            self.settings_dialog.set_video_files(video_files)
 
         if self.settings_dialog.exec_() == QtWidgets.QDialog.Accepted:
             self.local_settings = self.settings_dialog.get_settings()

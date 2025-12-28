@@ -722,6 +722,207 @@ def composite(frame: np.ndarray, mask: np.ndarray, blur_background: int = 0) -> 
     return np.clip(comp, 0, 255).astype(np.uint8)
 
 
+def _rgb_to_hsv(xp, rgb):
+    r = rgb[..., 0]
+    g = rgb[..., 1]
+    b = rgb[..., 2]
+    cmax = xp.maximum(xp.maximum(r, g), b)
+    cmin = xp.minimum(xp.minimum(r, g), b)
+    delta = cmax - cmin
+    h = xp.zeros_like(cmax)
+    mask = delta > 1e-6
+    delta_safe = xp.where(mask, delta, 1.0)
+
+    h_r = xp.mod((g - b) / delta_safe, 6.0)
+    h_g = ((b - r) / delta_safe) + 2.0
+    h_b = ((r - g) / delta_safe) + 4.0
+
+    h = xp.where((cmax == r) & mask, h_r, h)
+    h = xp.where((cmax == g) & mask, h_g, h)
+    h = xp.where((cmax == b) & mask, h_b, h)
+    h = h / 6.0
+
+    s = xp.where(cmax <= 1e-6, 0.0, delta / cmax)
+    v = cmax
+    return h, s, v
+
+
+def _hsv_to_rgb(xp, h, s, v):
+    h6 = h * 6.0
+    i = xp.floor(h6).astype(xp.int32)
+    f = h6 - i
+    p = v * (1.0 - s)
+    q = v * (1.0 - s * f)
+    t = v * (1.0 - s * (1.0 - f))
+    i_mod = i % 6
+
+    r = xp.zeros_like(v)
+    g = xp.zeros_like(v)
+    b = xp.zeros_like(v)
+
+    r = xp.where(i_mod == 0, v, r)
+    g = xp.where(i_mod == 0, t, g)
+    b = xp.where(i_mod == 0, p, b)
+
+    r = xp.where(i_mod == 1, q, r)
+    g = xp.where(i_mod == 1, v, g)
+    b = xp.where(i_mod == 1, p, b)
+
+    r = xp.where(i_mod == 2, p, r)
+    g = xp.where(i_mod == 2, v, g)
+    b = xp.where(i_mod == 2, t, b)
+
+    r = xp.where(i_mod == 3, p, r)
+    g = xp.where(i_mod == 3, q, g)
+    b = xp.where(i_mod == 3, v, b)
+
+    r = xp.where(i_mod == 4, t, r)
+    g = xp.where(i_mod == 4, p, g)
+    b = xp.where(i_mod == 4, v, b)
+
+    r = xp.where(i_mod == 5, v, r)
+    g = xp.where(i_mod == 5, p, g)
+    b = xp.where(i_mod == 5, q, b)
+
+    return xp.stack([r, g, b], axis=-1)
+
+
+def _srgb_to_linear(xp, rgb):
+    return xp.where(rgb <= 0.04045, rgb / 12.92, xp.power((rgb + 0.055) / 1.055, 2.4))
+
+
+def _linear_to_srgb(xp, rgb):
+    rgb = xp.clip(rgb, 0.0, 1.0)
+    return xp.where(rgb <= 0.0031308, rgb * 12.92, 1.055 * xp.power(rgb, 1.0 / 2.4) - 0.055)
+
+
+def _rgb_to_lab(xp, rgb):
+    rgb_lin = _srgb_to_linear(xp, rgb)
+    x = rgb_lin[..., 0] * 0.4124564 + rgb_lin[..., 1] * 0.3575761 + rgb_lin[..., 2] * 0.1804375
+    y = rgb_lin[..., 0] * 0.2126729 + rgb_lin[..., 1] * 0.7151522 + rgb_lin[..., 2] * 0.0721750
+    z = rgb_lin[..., 0] * 0.0193339 + rgb_lin[..., 1] * 0.1191920 + rgb_lin[..., 2] * 0.9503041
+
+    x = x / 0.95047
+    y = y / 1.00000
+    z = z / 1.08883
+
+    delta = 6.0 / 29.0
+    delta3 = delta ** 3
+    scale = 1.0 / (3 * delta ** 2)
+
+    fx = xp.where(x > delta3, xp.power(x, 1.0 / 3.0), x * scale + 4.0 / 29.0)
+    fy = xp.where(y > delta3, xp.power(y, 1.0 / 3.0), y * scale + 4.0 / 29.0)
+    fz = xp.where(z > delta3, xp.power(z, 1.0 / 3.0), z * scale + 4.0 / 29.0)
+
+    l = 116.0 * fy - 16.0
+    a = 500.0 * (fx - fy)
+    b = 200.0 * (fy - fz)
+    return l, a, b
+
+
+def _lab_to_rgb(xp, l, a, b):
+    fy = (l + 16.0) / 116.0
+    fx = fy + a / 500.0
+    fz = fy - b / 200.0
+
+    delta = 6.0 / 29.0
+    delta3 = delta ** 3
+
+    def _finv(t):
+        return xp.where(t ** 3 > delta3, t ** 3, (t - 4.0 / 29.0) * (3 * delta ** 2))
+
+    x = _finv(fx) * 0.95047
+    y = _finv(fy) * 1.00000
+    z = _finv(fz) * 1.08883
+
+    r = x * 3.2404542 + y * -1.5371385 + z * -0.4985314
+    g = x * -0.9692660 + y * 1.8760108 + z * 0.0415560
+    b = x * 0.0556434 + y * -0.2040259 + z * 1.0572252
+
+    rgb_lin = xp.stack([r, g, b], axis=-1)
+    return _linear_to_srgb(xp, rgb_lin)
+
+
+def _apply_color_adjustments_cpu(
+    frame: np.ndarray,
+    brightness: float,
+    contrast: float,
+    saturation: float,
+    temperature: float,
+) -> np.ndarray:
+    rgb = frame.astype(np.float32) / 255.0
+    if brightness != 0.0:
+        rgb = rgb + brightness
+    if contrast != 0.0:
+        rgb = (rgb - 0.5) * (1.0 + contrast) + 0.5
+    rgb = np.clip(rgb, 0.0, 1.0)
+
+    if saturation != 0.0:
+        h, s, v = _rgb_to_hsv(np, rgb)
+        s = np.clip(s * (1.0 + saturation), 0.0, 1.0)
+        rgb = _hsv_to_rgb(np, h, s, v)
+
+    if temperature != 0.0:
+        rgb = np.clip(rgb, 0.0, 1.0)
+        l, a, b = _rgb_to_lab(np, rgb)
+        b = np.clip(b + temperature * 18.0, -128.0, 127.0)
+        rgb = _lab_to_rgb(np, l, a, b)
+
+    rgb = np.clip(rgb, 0.0, 1.0)
+    return (rgb * 255.0).astype(np.uint8)
+
+
+def _apply_color_adjustments_gpu(
+    frame: np.ndarray,
+    brightness: float,
+    contrast: float,
+    saturation: float,
+    temperature: float,
+) -> Optional[np.ndarray]:
+    if not GPU_AVAILABLE or cp is None:
+        return None
+    try:
+        rgb = cp.asarray(frame, dtype=cp.float32) / 255.0
+        if brightness != 0.0:
+            rgb = rgb + brightness
+        if contrast != 0.0:
+            rgb = (rgb - 0.5) * (1.0 + contrast) + 0.5
+        rgb = cp.clip(rgb, 0.0, 1.0)
+
+        if saturation != 0.0:
+            h, s, v = _rgb_to_hsv(cp, rgb)
+            s = cp.clip(s * (1.0 + saturation), 0.0, 1.0)
+            rgb = _hsv_to_rgb(cp, h, s, v)
+
+        if temperature != 0.0:
+            rgb = cp.clip(rgb, 0.0, 1.0)
+            l, a, b = _rgb_to_lab(cp, rgb)
+            b = cp.clip(b + temperature * 18.0, -128.0, 127.0)
+            rgb = _lab_to_rgb(cp, l, a, b)
+
+        rgb = cp.clip(rgb, 0.0, 1.0)
+        return cp.asnumpy(rgb * 255.0).astype(np.uint8)
+    except Exception:
+        return None
+
+
+def apply_color_adjustments(
+    frame: np.ndarray,
+    brightness: float = 0.0,
+    contrast: float = 0.0,
+    saturation: float = 0.0,
+    temperature: float = 0.0,
+) -> np.ndarray:
+    if brightness == 0.0 and contrast == 0.0 and saturation == 0.0 and temperature == 0.0:
+        return frame
+
+    gpu_result = _apply_color_adjustments_gpu(frame, brightness, contrast, saturation, temperature)
+    if gpu_result is not None:
+        return gpu_result
+
+    return _apply_color_adjustments_cpu(frame, brightness, contrast, saturation, temperature)
+
+
 def _ffmpeg_loglevel() -> str:
     level = os.environ.get("BGSOFT_FFMPEG_LOGLEVEL", "warning").strip()
     return level if level else "warning"
@@ -1129,77 +1330,158 @@ def _concat_chunks(chunk_files: list[Path], out_path: Path, log_stream: Optional
         pass
 
 
-def render_preview_frame(
+def _render_preview_pair(
     video_path: Path,
     model_path: Path,
-    frame_index: int = 0,
+    frame_index: int,
+    *,
+    session: Optional[ort.InferenceSession] = None,
     blur_background: int = 0,
     mask_expansion: int = -5,
     feather: float = 0.0,
     smooth_contour: float = 0.05,
     transparency_threshold: float = 0.65,
-) -> Optional[np.ndarray]:
-    """Render a single frame for preview in the settings dialog.
+    brightness: float = 0.0,
+    contrast: float = 0.0,
+    saturation: float = 0.0,
+    temperature: float = 0.0,
+) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+    """Render a single preview frame and return (original, rendered)."""
+    # Validate inputs
+    if not video_path or not video_path.exists():
+        return None, None
+    if not model_path or not model_path.exists():
+        return None, None
 
-    Returns RGB frame as uint8 numpy array, or None if rendering fails.
-    """
     try:
-        # Validate inputs
-        if not video_path or not video_path.exists():
-            return None
-        if not model_path or not model_path.exists():
-            return None
+        probe = probe_video(video_path)
+    except Exception:
+        return None, None
 
-        # Probe video to get dimensions
-        try:
-            probe = probe_video(video_path)
-        except Exception:
-            return None
+    if probe.width == 0 or probe.height == 0:
+        return None, None
 
-        if probe.width == 0 or probe.height == 0:
-            return None
-
-        # Load model with timeout/error handling
+    if session is None:
         try:
             session = load_selfie_model(model_path)
         except Exception:
-            return None
+            return None, None
 
-        # Extract just the frame we need
-        try:
-            for idx, frame in enumerate(
-                iter_frames(
-                    video_path,
-                    probe.width,
-                    probe.height,
-                    log_stream=None,
-                    threads=2,
-                    use_hwaccel=False,
+    fps = probe.fps or 30.0
+    total_frames = None
+    if probe.duration and fps:
+        total_frames = int(round(probe.duration * fps))
+    if total_frames is not None:
+        frame_index = max(0, min(frame_index, max(0, total_frames - 1)))
+    else:
+        frame_index = max(0, frame_index)
+    start_time = frame_index / fps if fps else 0.0
+
+    try:
+        for frame in iter_frames(
+            video_path,
+            probe.width,
+            probe.height,
+            log_stream=None,
+            threads=2,
+            use_hwaccel=False,
+            start_time=start_time,
+            max_frames=1,
+        ):
+            original = frame.copy()
+            try:
+                mask_raw = run_selfie_mask(session, frame)
+                mask = apply_mask_filters(
+                    mask_raw,
+                    threshold=transparency_threshold,
+                    smooth_contour=smooth_contour,
+                    mask_expansion=mask_expansion,
+                    feather=feather,
                 )
-            ):
-                if idx == frame_index:
-                    # Run inference and processing with error handling
-                    try:
-                        mask_raw = run_selfie_mask(session, frame)
-                        mask = apply_mask_filters(
-                            mask_raw,
-                            threshold=transparency_threshold,
-                            smooth_contour=smooth_contour,
-                            mask_expansion=mask_expansion,
-                            feather=feather,
-                        )
-                        comp = composite(frame, mask, blur_background=blur_background)
-                        return comp
-                    except Exception:
-                        return None
-                elif idx > frame_index:
-                    break
-        except Exception:
-            return None
-
-        return None
+                comp = composite(frame, mask, blur_background=blur_background)
+                comp = apply_color_adjustments(
+                    comp,
+                    brightness=brightness,
+                    contrast=contrast,
+                    saturation=saturation,
+                    temperature=temperature,
+                )
+                return original, comp
+            except Exception:
+                return original, None
     except Exception:
-        return None
+        return None, None
+
+    return None, None
+
+
+def render_preview_frame(
+    video_path: Path,
+    model_path: Path,
+    frame_index: int = 0,
+    *,
+    session: Optional[ort.InferenceSession] = None,
+    blur_background: int = 0,
+    mask_expansion: int = -5,
+    feather: float = 0.0,
+    smooth_contour: float = 0.05,
+    transparency_threshold: float = 0.65,
+    brightness: float = 0.0,
+    contrast: float = 0.0,
+    saturation: float = 0.0,
+    temperature: float = 0.0,
+) -> Optional[np.ndarray]:
+    """Render a single frame for preview in the settings dialog."""
+    _, rendered = _render_preview_pair(
+        video_path,
+        model_path,
+        frame_index,
+        session=session,
+        blur_background=blur_background,
+        mask_expansion=mask_expansion,
+        feather=feather,
+        smooth_contour=smooth_contour,
+        transparency_threshold=transparency_threshold,
+        brightness=brightness,
+        contrast=contrast,
+        saturation=saturation,
+        temperature=temperature,
+    )
+    return rendered
+
+
+def render_preview_pair(
+    video_path: Path,
+    model_path: Path,
+    frame_index: int = 0,
+    *,
+    session: Optional[ort.InferenceSession] = None,
+    blur_background: int = 0,
+    mask_expansion: int = -5,
+    feather: float = 0.0,
+    smooth_contour: float = 0.05,
+    transparency_threshold: float = 0.65,
+    brightness: float = 0.0,
+    contrast: float = 0.0,
+    saturation: float = 0.0,
+    temperature: float = 0.0,
+) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+    """Render a single frame for preview and return (original, rendered)."""
+    return _render_preview_pair(
+        video_path,
+        model_path,
+        frame_index,
+        session=session,
+        blur_background=blur_background,
+        mask_expansion=mask_expansion,
+        feather=feather,
+        smooth_contour=smooth_contour,
+        transparency_threshold=transparency_threshold,
+        brightness=brightness,
+        contrast=contrast,
+        saturation=saturation,
+        temperature=temperature,
+    )
 
 
 def _build_metadata_dict(
@@ -1209,6 +1491,10 @@ def _build_metadata_dict(
     feather: float,
     smooth_contour: float,
     transparency_threshold: float,
+    brightness: float = 0.0,
+    contrast: float = 0.0,
+    saturation: float = 0.0,
+    temperature: float = 0.0,
     extra_rotation_ccw: int = 0,
 ) -> dict:
     """Build metadata dict from render settings for embedding in video file."""
@@ -1224,6 +1510,10 @@ def _build_metadata_dict(
         "bgsoft_feather": f"{feather:.4f}",
         "bgsoft_smooth_contour": f"{smooth_contour:.4f}",
         "bgsoft_transparency_threshold": f"{transparency_threshold:.4f}",
+        "bgsoft_brightness": f"{brightness:.4f}",
+        "bgsoft_contrast": f"{contrast:.4f}",
+        "bgsoft_saturation": f"{saturation:.4f}",
+        "bgsoft_temperature": f"{temperature:.4f}",
     }
     if extra_rotation_ccw:
         metadata["bgsoft_extra_rotation_ccw"] = str(extra_rotation_ccw)
@@ -1323,6 +1613,10 @@ def _render_local_impl(
     mask_expansion = int(_from_bg("mask_expansion", settings.get("mask_expansion", -5)))
     feather = float(_from_bg("feather", settings.get("feather", 0.0)))
     blur_background = int(_from_bg("blur_background", settings.get("blur_background", 0)))
+    brightness = float(_from_bg("brightness", settings.get("brightness", 0.0)))
+    contrast = float(_from_bg("contrast", settings.get("contrast", 0.0)))
+    saturation = float(_from_bg("saturation", settings.get("saturation", 0.0)))
+    temperature = float(_from_bg("temperature", settings.get("temperature", 0.0)))
 
     probe = probe_video(input_video)
     # Base dimensions after metadata rotation only
@@ -1345,6 +1639,10 @@ def _render_local_impl(
         "BG params: "
         f"threshold={threshold}, smooth_contour={smooth_contour}, mask_expansion={mask_expansion}, "
         f"feather={feather}, blur_background={blur_background}\n"
+    )
+    log_file.write(
+        "Color params: "
+        f"brightness={brightness}, contrast={contrast}, saturation={saturation}, temperature={temperature}\n"
     )
     log_file.flush()
 
@@ -1400,6 +1698,13 @@ def _render_local_impl(
                 feather=feather,
             )
             comp = composite(frame, mask, blur_background=blur_background)
+            comp = apply_color_adjustments(
+                comp,
+                brightness=brightness,
+                contrast=contrast,
+                saturation=saturation,
+                temperature=temperature,
+            )
             if abs_idx < debug_frames:
                 try:
                     import numpy as _np
@@ -1464,6 +1769,10 @@ def _render_local_impl(
             feather=feather,
             smooth_contour=smooth_contour,
             transparency_threshold=threshold,
+            brightness=brightness,
+            contrast=contrast,
+            saturation=saturation,
+            temperature=temperature,
             extra_rotation_ccw=extra_rotation_ccw,
         )
 
@@ -1501,6 +1810,10 @@ def _render_local_impl(
             feather=feather,
             smooth_contour=smooth_contour,
             transparency_threshold=threshold,
+            brightness=brightness,
+            contrast=contrast,
+            saturation=saturation,
+            temperature=temperature,
             extra_rotation_ccw=extra_rotation_ccw,
         )
 
