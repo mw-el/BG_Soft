@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=BG-Soft
+Comment=Automatisierung BG-Soften mit OBS
+Icon=${APP_DIR}/bgsoft.png
+Exec=${APP_DIR}/launch_bgsoft.sh
+Path=${APP_DIR}
+Terminal=false
+Categories=AudioVideo;Utility;
+StartupNotify=true
+StartupWMClass=bgsoft
