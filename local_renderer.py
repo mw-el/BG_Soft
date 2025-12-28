@@ -1193,6 +1193,59 @@ def _mux_audio(
     video_path.unlink()
 
 
+def _extract_audio_clip(
+    input_video: Path,
+    out_path: Path,
+    start_time: float,
+    duration: float,
+    log_stream: Optional[object],
+) -> Optional[Path]:
+    if duration <= 0:
+        return None
+    loglevel = _ffmpeg_loglevel()
+    report_base = input_video.resolve()
+    audio_report = _build_ffmpeg_report_path(report_base, "preview_audio")
+    audio_report.parent.mkdir(parents=True, exist_ok=True)
+    audio_env = _ffmpeg_env(audio_report)
+    cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        "-report",
+        "-loglevel",
+        loglevel,
+        "-ss",
+        f"{start_time:.3f}",
+        "-t",
+        f"{duration:.3f}",
+        "-i",
+        str(input_video),
+        "-vn",
+        "-map",
+        "0:a:0?",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        "-y",
+        str(out_path),
+    ]
+    proc = subprocess.run(
+        cmd,
+        stdout=log_stream or subprocess.DEVNULL,
+        stderr=log_stream or subprocess.DEVNULL,
+        env=audio_env,
+        timeout=120,
+    )
+    if proc.returncode != 0:
+        return None
+    try:
+        if out_path.exists() and out_path.stat().st_size > 0:
+            return out_path
+    except Exception:
+        return None
+    return None
+
+
 def encode_video(
     frames: Iterable[np.ndarray],
     out_path: Path,
@@ -1482,6 +1535,104 @@ def render_preview_pair(
         saturation=saturation,
         temperature=temperature,
     )
+
+
+def render_preview_clip(
+    input_video: Path,
+    output_video: Path,
+    model_path: Path,
+    start_time: float,
+    duration: float,
+    *,
+    background_settings: Optional[object] = None,
+    threads: int = 2,
+    use_nvenc: bool = True,
+    log_stream: Optional[object] = None,
+) -> None:
+    """Render a short preview clip with audio."""
+    if not input_video.exists() or not model_path.exists():
+        raise RuntimeError("Missing input or model")
+
+    probe = probe_video(input_video)
+    target_w, target_h = probe.width, probe.height
+    fps = probe.fps or 30.0
+    max_frames = max(1, int(round(duration * fps)))
+    if target_w <= 0 or target_h <= 0:
+        raise RuntimeError("Invalid video dimensions for preview clip")
+
+    settings = {}
+    if isinstance(background_settings, dict):
+        settings = background_settings
+    elif background_settings is not None:
+        settings = background_settings.__dict__
+
+    def _from_bg(key: str, default_val: float | int) -> float | int:
+        if not background_settings:
+            return default_val
+        return settings.get(key, default_val)  # type: ignore[return-value]
+
+    threshold = float(_from_bg("threshold", settings.get("threshold", settings.get("transparency_threshold", 0.65))))
+    smooth_contour = float(_from_bg("smooth_contour", settings.get("smooth_contour", 0.05)))
+    mask_expansion = int(_from_bg("mask_expansion", settings.get("mask_expansion", -5)))
+    feather = float(_from_bg("feather", settings.get("feather", 0.0)))
+    blur_background = int(_from_bg("blur_background", settings.get("blur_background", 0)))
+    brightness = float(_from_bg("brightness", settings.get("brightness", 0.0)))
+    contrast = float(_from_bg("contrast", settings.get("contrast", 0.0)))
+    saturation = float(_from_bg("saturation", settings.get("saturation", 0.0)))
+    temperature = float(_from_bg("temperature", settings.get("temperature", 0.0)))
+
+    session = load_selfie_model(model_path, log_stream=log_stream)
+
+    def _frame_iter() -> Generator[np.ndarray, None, None]:
+        for frame in iter_frames(
+            input_video,
+            target_w,
+            target_h,
+            log_stream=log_stream,
+            threads=threads,
+            use_hwaccel=False,
+            start_time=start_time,
+            max_frames=max_frames,
+        ):
+            mask_raw = run_selfie_mask(session, frame, log_stream=log_stream)
+            mask = apply_mask_filters(
+                mask_raw,
+                threshold=threshold,
+                smooth_contour=smooth_contour,
+                mask_expansion=mask_expansion,
+                feather=feather,
+            )
+            comp = composite(frame, mask, blur_background=blur_background)
+            comp = apply_color_adjustments(
+                comp,
+                brightness=brightness,
+                contrast=contrast,
+                saturation=saturation,
+                temperature=temperature,
+            )
+            yield comp
+
+    output_video.parent.mkdir(parents=True, exist_ok=True)
+    audio_path = output_video.with_suffix(".audio.m4a")
+    audio_clip = _extract_audio_clip(input_video, audio_path, start_time, duration, log_stream)
+    try:
+        encode_video(
+            frames=_frame_iter(),
+            out_path=output_video,
+            width=target_w,
+            height=target_h,
+            fps=fps,
+            audio_source=audio_clip,
+            log_stream=log_stream,
+            use_nvenc=use_nvenc,
+            threads=threads,
+        )
+    finally:
+        if audio_clip and audio_clip.exists():
+            try:
+                audio_clip.unlink()
+            except Exception:
+                pass
 
 
 def _build_metadata_dict(

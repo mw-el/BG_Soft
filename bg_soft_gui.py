@@ -11,10 +11,10 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional
 
 import numpy as np
-from PyQt5 import QtCore, QtGui, QtWidgets
+from PyQt5 import QtCore, QtGui, QtWidgets, QtMultimedia, QtMultimediaWidgets
 import onnxruntime as ort
 
-from local_renderer import load_selfie_model, probe_video, render_local, render_preview_pair
+from local_renderer import load_selfie_model, probe_video, render_local, render_preview_pair, render_preview_clip
 from obs_controller import (
     load_settings,
     open_with_system_handler,
@@ -288,6 +288,39 @@ def _build_local_settings_from_file() -> LocalRenderOptions:
     )
 
 
+class CollapsibleSection(QtWidgets.QWidget):
+    """Simple collapsible section used for advanced settings."""
+
+    def __init__(self, title: str, collapsed: bool = True, parent: Optional[QtWidgets.QWidget] = None) -> None:
+        super().__init__(parent)
+        self._toggle = QtWidgets.QToolButton()
+        self._toggle.setStyleSheet("QToolButton { border: none; }")
+        self._toggle.setToolButtonStyle(QtCore.Qt.ToolButtonTextBesideIcon)
+        self._toggle.setText(title)
+        self._toggle.setCheckable(True)
+        self._toggle.setChecked(not collapsed)
+        self._toggle.setArrowType(QtCore.Qt.RightArrow if collapsed else QtCore.Qt.DownArrow)
+        self._toggle.clicked.connect(self._on_toggled)
+
+        self._content = QtWidgets.QWidget()
+        self._content.setVisible(not collapsed)
+
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+        layout.addWidget(self._toggle)
+        layout.addWidget(self._content)
+
+    def setContentWidget(self, widget: QtWidgets.QWidget) -> None:
+        content_layout = QtWidgets.QVBoxLayout(self._content)
+        content_layout.setContentsMargins(12, 0, 0, 0)
+        content_layout.addWidget(widget)
+
+    def _on_toggled(self, checked: bool) -> None:
+        self._toggle.setArrowType(QtCore.Qt.DownArrow if checked else QtCore.Qt.RightArrow)
+        self._content.setVisible(checked)
+
+
 class LocalSettingsWidget(QtWidgets.QGroupBox):
     """Controls for the local renderer."""
 
@@ -295,7 +328,7 @@ class LocalSettingsWidget(QtWidgets.QGroupBox):
 
     def __init__(self, defaults: Optional[LocalRenderOptions] = None) -> None:
         super().__init__("Renderoptionen")
-        form = QtWidgets.QFormLayout(self)
+        main_layout = QtWidgets.QVBoxLayout(self)
 
         self.enable_local = QtWidgets.QCheckBox("Lokalen Renderer verwenden (kein OBS)")
         self.enable_local.setChecked(defaults.enabled if defaults else True)
@@ -435,17 +468,29 @@ class LocalSettingsWidget(QtWidgets.QGroupBox):
         adjustments_layout.addRow("Sättigung", self.saturation)
         adjustments_layout.addRow("Temperatur", self.temperature)
 
-        form.addRow(self.enable_local)
-        form.addRow("Ausgabe-Unterordner", self.output_subdir)
-        form.addRow("Zusatzrotation", self.rotation)
-        form.addRow("Dekodierungs-Threads", self.threads)
-        form.addRow("ONNX Modell", model_container)
-        form.addRow("Blur Hintergrund", self.blur_background)
-        form.addRow("Masken-Expansion", self.mask_expansion)
-        form.addRow("Feather", self.feather)
-        form.addRow("Kontur glätten", self.smooth_contour)
-        form.addRow("Transparenz-Grenzwert", self.transparency_threshold)
-        form.addRow(adjustments_group)
+        base_form = QtWidgets.QFormLayout()
+        base_form.addRow(self.enable_local)
+        base_form.addRow("Ausgabe-Unterordner", self.output_subdir)
+        base_form.addRow("Zusatzrotation", self.rotation)
+        base_form.addRow("Dekodierungs-Threads", self.threads)
+        base_form.addRow("ONNX Modell", model_container)
+
+        bg_form = QtWidgets.QFormLayout()
+        bg_form.addRow("Blur Hintergrund", self.blur_background)
+        bg_form.addRow("Masken-Expansion", self.mask_expansion)
+        bg_form.addRow("Feather", self.feather)
+        bg_form.addRow("Kontur glätten", self.smooth_contour)
+        bg_form.addRow("Transparenz-Grenzwert", self.transparency_threshold)
+
+        bg_section = CollapsibleSection("Hintergrund- & Masken-Optionen", collapsed=True)
+        bg_container = QtWidgets.QWidget()
+        bg_container.setLayout(bg_form)
+        bg_section.setContentWidget(bg_container)
+
+        main_layout.addWidget(adjustments_group)
+        main_layout.addLayout(base_form)
+        main_layout.addWidget(bg_section)
+        main_layout.addStretch(1)
 
         self.model_select.currentIndexChanged.connect(self._on_model_changed)
         self.enable_local.stateChanged.connect(self._emit_settings_changed)
@@ -992,8 +1037,69 @@ class PreviewWorker(QtCore.QObject):
         self.preview_ready.emit(request_id, original, rendered, error_msg)
 
 
+class PreviewClipWorker(QtCore.QObject):
+    """Background worker to render a short preview clip."""
+
+    clip_ready = QtCore.pyqtSignal(int, object, str)  # request_id, clip_path, error
+
+    @QtCore.pyqtSlot(object, object, float, float, int)
+    def render_clip(
+        self,
+        video_path: pathlib.Path,
+        settings: LocalRenderOptions,
+        start_time: float,
+        duration: float,
+        request_id: int,
+    ) -> None:
+        error_msg = ""
+        clip_path = None
+        try:
+            if not video_path or not video_path.exists():
+                error_msg = "Videodatei nicht gefunden"
+            elif not settings.model_path or not settings.model_path.exists():
+                error_msg = "Modell nicht gefunden"
+            else:
+                preview_dir = video_path.parent / ".bgsoft_preview"
+                preview_dir.mkdir(parents=True, exist_ok=True)
+                clip_path = preview_dir / f"{video_path.stem}_preview_optimized.mp4"
+                if clip_path.exists():
+                    try:
+                        clip_path.unlink()
+                    except Exception:
+                        pass
+                try:
+                    render_preview_clip(
+                        input_video=video_path,
+                        output_video=clip_path,
+                        model_path=settings.model_path,
+                        start_time=start_time,
+                        duration=duration,
+                        background_settings=settings,
+                        threads=max(1, min(4, settings.threads)),
+                        use_nvenc=True,
+                    )
+                except Exception:
+                    render_preview_clip(
+                        input_video=video_path,
+                        output_video=clip_path,
+                        model_path=settings.model_path,
+                        start_time=start_time,
+                        duration=duration,
+                        background_settings=settings,
+                        threads=max(1, min(4, settings.threads)),
+                        use_nvenc=False,
+                    )
+        except Exception:
+            if not error_msg:
+                error_msg = "Clip-Rendering fehlgeschlagen"
+
+        self.clip_ready.emit(request_id, clip_path, error_msg)
+
+
 class LoupeLabel(QtWidgets.QLabel):
     """Custom label with loupe magnification on hover."""
+
+    loupe_event = QtCore.pyqtSignal(object, bool)  # normalized position, clicked
 
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
@@ -1002,24 +1108,71 @@ class LoupeLabel(QtWidgets.QLabel):
         self.loupe_pos: Optional[QtCore.QPoint] = None
         self.show_loupe = False
         self.original_pixmap: Optional[QtGui.QPixmap] = None
+        self._loupe_norm: Optional[tuple[float, float]] = None
         self.setMouseTracking(True)
 
     def set_original_pixmap(self, pixmap: Optional[QtGui.QPixmap]) -> None:
         """Store original full-resolution pixmap for loupe."""
         self.original_pixmap = pixmap
 
+    def set_loupe_normalized(self, norm: Optional[tuple[float, float]], active: bool) -> None:
+        self._loupe_norm = norm
+        self.show_loupe = active and norm is not None
+        if self.show_loupe and norm is not None:
+            rect = self._display_rect()
+            if rect:
+                x = rect.left() + int(norm[0] * rect.width())
+                y = rect.top() + int(norm[1] * rect.height())
+                self.loupe_pos = QtCore.QPoint(x, y)
+            else:
+                self.loupe_pos = None
+                self.show_loupe = False
+        else:
+            self.loupe_pos = None
+        self.update()
+
     def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:
         """Track mouse position for loupe."""
-        self.loupe_pos = event.pos()
-        self.show_loupe = True
-        self.update()
+        if self.show_loupe:
+            norm = self._normalized_from_pos(event.pos())
+            if norm is not None:
+                self.loupe_event.emit(norm, False)
         super().mouseMoveEvent(event)
+
+    def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:
+        if event.button() == QtCore.Qt.LeftButton:
+            norm = self._normalized_from_pos(event.pos())
+            if norm is not None:
+                self.loupe_event.emit(norm, True)
+        super().mousePressEvent(event)
 
     def leaveEvent(self, event: QtGui.QEvent) -> None:
         """Hide loupe when mouse leaves."""
-        self.show_loupe = False
-        self.update()
+        if not self.show_loupe:
+            self.loupe_event.emit(None, False)
         super().leaveEvent(event)
+
+    def _display_rect(self) -> Optional[QtCore.QRect]:
+        pixmap = self.pixmap()
+        if not pixmap:
+            return None
+        pix_w = pixmap.width()
+        pix_h = pixmap.height()
+        if pix_w <= 0 or pix_h <= 0:
+            return None
+        x = max(0, (self.width() - pix_w) // 2)
+        y = max(0, (self.height() - pix_h) // 2)
+        return QtCore.QRect(x, y, pix_w, pix_h)
+
+    def _normalized_from_pos(self, pos: QtCore.QPoint) -> Optional[tuple[float, float]]:
+        rect = self._display_rect()
+        if not rect:
+            return None
+        x = min(max(pos.x(), rect.left()), rect.right())
+        y = min(max(pos.y(), rect.top()), rect.bottom())
+        w = max(1, rect.width())
+        h = max(1, rect.height())
+        return ((x - rect.left()) / w, (y - rect.top()) / h)
 
     def paintEvent(self, event: QtGui.QPaintEvent) -> None:
         """Paint frame and loupe overlay."""
@@ -1035,17 +1188,23 @@ class LoupeLabel(QtWidgets.QLabel):
                 if not pixmap:
                     return
 
+                rect = self._display_rect()
+                if not rect:
+                    return
+
                 # Calculate zoom scale (displayed size vs original size)
-                displayed_w = self.width()
-                displayed_h = self.height()
+                displayed_w = rect.width()
+                displayed_h = rect.height()
                 orig_w = self.original_pixmap.width()
                 orig_h = self.original_pixmap.height()
 
                 # Get pixel coordinates in original image
                 scale_x = orig_w / displayed_w if displayed_w > 0 else 1
                 scale_y = orig_h / displayed_h if displayed_h > 0 else 1
-                orig_x = int(self.loupe_pos.x() * scale_x)
-                orig_y = int(self.loupe_pos.y() * scale_y)
+                pos_x = self.loupe_pos.x() - rect.left()
+                pos_y = self.loupe_pos.y() - rect.top()
+                orig_x = int(pos_x * scale_x)
+                orig_y = int(pos_y * scale_y)
 
                 # Clamp to valid range
                 orig_x = max(0, min(orig_x, orig_w - 1))
@@ -1098,35 +1257,73 @@ class LoupeLabel(QtWidgets.QLabel):
                 pass
 
 
+class PreviewPane(QtWidgets.QWidget):
+    """Single preview pane with still image and video playback."""
+
+    loupe_event = QtCore.pyqtSignal(object, bool)
+
+    def __init__(self, title: str, parent: Optional[QtWidgets.QWidget] = None) -> None:
+        super().__init__(parent)
+        self.title = QtWidgets.QLabel(title)
+        self.title.setAlignment(QtCore.Qt.AlignCenter)
+        self.title.setStyleSheet("color: #bbb; font-size: 12px; padding: 2px;")
+
+        self.loupe_label = LoupeLabel()
+        self.loupe_label.setAlignment(QtCore.Qt.AlignCenter)
+        self.loupe_label.setMinimumSize(640, 360)
+        self.loupe_label.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+        self.loupe_label.setStyleSheet("background-color: #222; color: #888; border: 1px solid #444;")
+
+        self.video_widget = QtMultimediaWidgets.QVideoWidget()
+        self.video_widget.setMinimumSize(640, 360)
+        self.video_widget.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+
+        self._stack = QtWidgets.QStackedLayout()
+        self._stack.addWidget(self.loupe_label)
+        self._stack.addWidget(self.video_widget)
+
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+        layout.addWidget(self.title)
+        layout.addLayout(self._stack, 1)
+
+        self.loupe_label.loupe_event.connect(self.loupe_event)
+
+    def set_pixmap(self, pixmap: Optional[QtGui.QPixmap], text: str = "") -> None:
+        self.loupe_label.setPixmap(pixmap)
+        if pixmap is None:
+            self.loupe_label.setText(text)
+        else:
+            self.loupe_label.setText("")
+        self.show_video(False)
+
+    def show_video(self, enabled: bool) -> None:
+        self._stack.setCurrentWidget(self.video_widget if enabled else self.loupe_label)
+
 class FramePreviewWidget(QtWidgets.QWidget):
-    """Preview widget showing original and rendered frames side-by-side with loupe tool."""
+    """Preview widget showing original and rendered frames with linked loupe."""
 
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
         self.original_frame: Optional[QtGui.QPixmap] = None
         self.rendered_frame: Optional[QtGui.QPixmap] = None
         self.error_message: Optional[str] = None
+        self._loupe_active = False
+        self._loupe_norm: Optional[tuple[float, float]] = None
 
-        layout = QtWidgets.QHBoxLayout(self)
+        layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(8)
 
-        # Original frame with loupe
-        self.original_label = LoupeLabel()
-        self.original_label.setText("Original")
-        self.original_label.setAlignment(QtCore.Qt.AlignCenter)
-        self.original_label.setMinimumSize(300, 200)
-        self.original_label.setStyleSheet("background-color: #222; color: #888; border: 1px solid #444;")
+        self.original_pane = PreviewPane("Original")
+        self.rendered_pane = PreviewPane("Optimiert")
 
-        # Rendered frame with loupe
-        self.rendered_label = LoupeLabel()
-        self.rendered_label.setText("Gerendert")
-        self.rendered_label.setAlignment(QtCore.Qt.AlignCenter)
-        self.rendered_label.setMinimumSize(300, 200)
-        self.rendered_label.setStyleSheet("background-color: #222; color: #888; border: 1px solid #444;")
+        self.original_pane.loupe_event.connect(self._on_loupe_event)
+        self.rendered_pane.loupe_event.connect(self._on_loupe_event)
 
-        layout.addWidget(self.original_label)
-        layout.addWidget(self.rendered_label)
+        layout.addWidget(self.original_pane, 1)
+        layout.addWidget(self.rendered_pane, 1)
 
     def set_frames(self, original_frame: Optional[QtGui.QPixmap], rendered_frame: Optional[QtGui.QPixmap], error: Optional[str] = None) -> None:
         """Update the displayed frames."""
@@ -1139,33 +1336,77 @@ class FramePreviewWidget(QtWidgets.QWidget):
         """Update label pixmaps to fit available space."""
         # Show error if present
         if self.error_message:
-            self.original_label.setPixmap(None)
-            self.original_label.setText(f"❌ Fehler:\n{self.error_message}")
-            self.rendered_label.setPixmap(None)
-            self.rendered_label.setText("")
+            self.original_pane.set_pixmap(None, f"❌ Fehler:\n{self.error_message}")
+            self.rendered_pane.set_pixmap(None, "")
             return
 
         if self.original_frame and not self.original_frame.isNull():
-            displayed = self.original_frame.scaledToWidth(300, QtCore.Qt.SmoothTransformation)
-            self.original_label.setPixmap(displayed)
-            self.original_label.set_original_pixmap(self.original_frame)
+            displayed = self.original_frame.scaled(
+                self.original_pane.loupe_label.size(),
+                QtCore.Qt.KeepAspectRatio,
+                QtCore.Qt.SmoothTransformation,
+            )
+            self.original_pane.set_pixmap(displayed)
+            self.original_pane.loupe_label.set_original_pixmap(self.original_frame)
         else:
-            self.original_label.setPixmap(None)
-            self.original_label.setText("Lädt...")
+            self.original_pane.set_pixmap(None, "Lädt...")
 
         if self.rendered_frame and not self.rendered_frame.isNull():
-            displayed = self.rendered_frame.scaledToWidth(300, QtCore.Qt.SmoothTransformation)
-            self.rendered_label.setPixmap(displayed)
-            self.rendered_label.set_original_pixmap(self.rendered_frame)
+            displayed = self.rendered_frame.scaled(
+                self.rendered_pane.loupe_label.size(),
+                QtCore.Qt.KeepAspectRatio,
+                QtCore.Qt.SmoothTransformation,
+            )
+            self.rendered_pane.set_pixmap(displayed)
+            self.rendered_pane.loupe_label.set_original_pixmap(self.rendered_frame)
         else:
-            self.rendered_label.setPixmap(None)
-            self.rendered_label.setText("Lädt...")
+            self.rendered_pane.set_pixmap(None, "Lädt...")
+
+        if self._loupe_active and self._loupe_norm is not None:
+            self._set_loupe(self._loupe_norm, active=True)
+        else:
+            self._set_loupe(None, active=False)
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
+        super().resizeEvent(event)
+        if self.original_frame or self.rendered_frame:
+            self._update_display()
+
+    def _on_loupe_event(self, norm: object, clicked: bool) -> None:
+        if clicked:
+            self._loupe_active = not self._loupe_active
+            if not self._loupe_active:
+                self._loupe_norm = None
+                self._set_loupe(None, active=False)
+                return
+        if not self._loupe_active:
+            return
+        if isinstance(norm, tuple):
+            self._loupe_norm = norm
+            self._set_loupe(norm, active=True)
+
+    def _set_loupe(self, norm: Optional[tuple[float, float]], active: bool) -> None:
+        self.original_pane.loupe_label.set_loupe_normalized(norm, active)
+        self.rendered_pane.loupe_label.set_loupe_normalized(norm, active)
+
+    def set_video_mode(self, enabled: bool) -> None:
+        self.original_pane.show_video(enabled)
+        self.rendered_pane.show_video(enabled)
+
+    @property
+    def original_video_widget(self) -> QtMultimediaWidgets.QVideoWidget:
+        return self.original_pane.video_widget
+
+    @property
+    def rendered_video_widget(self) -> QtMultimediaWidgets.QVideoWidget:
+        return self.rendered_pane.video_widget
 
 
 class SettingsDialog(QtWidgets.QDialog):
     """Modal dialog for local renderer settings."""
 
     preview_request = QtCore.pyqtSignal(object, object, int, int)
+    clip_request = QtCore.pyqtSignal(object, object, float, float, int)
 
     def __init__(
         self,
@@ -1175,10 +1416,11 @@ class SettingsDialog(QtWidgets.QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Einstellungen")
-        self.resize(1200, 800)
+        self.resize(1500, 900)
         self.video_files = video_files or []
 
         self.local_widget = LocalSettingsWidget(local_defaults)
+        self.local_widget.setMaximumWidth(480)
         self.local_widget.settings_changed.connect(self._schedule_preview_update)
 
         self._preview_timer = QtCore.QTimer(self)
@@ -1196,9 +1438,25 @@ class SettingsDialog(QtWidgets.QDialog):
         self._preview_worker.preview_ready.connect(self._on_preview_ready)
         self._preview_thread.start()
 
+        self._clip_thread = QtCore.QThread(self)
+        self._clip_worker = PreviewClipWorker()
+        self._clip_worker.moveToThread(self._clip_thread)
+        self.clip_request.connect(self._clip_worker.render_clip)
+        self._clip_worker.clip_ready.connect(self._on_clip_ready)
+        self._clip_thread.start()
+        self._clip_request_id = 0
+        self._clip_stale = True
+        self._rendered_clip_path: Optional[pathlib.Path] = None
+        self._pending_play_after = False
+
         self.preview_widget = FramePreviewWidget()
         self.preview_status = QtWidgets.QLabel("")
         self.preview_status.setStyleSheet("color: #999; font-size: 11px; padding: 4px;")
+
+        self.preview_play_btn = QtWidgets.QPushButton("▶ 5s")
+        self.preview_stop_btn = QtWidgets.QPushButton("⏹")
+        self.preview_play_btn.clicked.connect(self._on_play_clicked)
+        self.preview_stop_btn.clicked.connect(self._stop_playback)
 
         self.prev_10_btn = QtWidgets.QPushButton("<< -10")
         self.prev_1_btn = QtWidgets.QPushButton("< -1")
@@ -1221,6 +1479,17 @@ class SettingsDialog(QtWidgets.QDialog):
         self.frame_spin.setRange(0, 0)
         self.frame_spin.valueChanged.connect(self._on_frame_spin_changed)
 
+        self._preview_duration_sec = 5.0
+        self._playback_timer = QtCore.QTimer(self)
+        self._playback_timer.setSingleShot(True)
+        self._playback_timer.timeout.connect(self._stop_playback)
+
+        self._original_player = QtMultimedia.QMediaPlayer(self)
+        self._rendered_player = QtMultimedia.QMediaPlayer(self)
+        self._original_player.setVideoOutput(self.preview_widget.original_video_widget)
+        self._rendered_player.setVideoOutput(self.preview_widget.rendered_video_widget)
+        self._rendered_player.setMuted(True)
+
         # Settings panel
         scroll = QtWidgets.QScrollArea()
         scroll.setWidgetResizable(True)
@@ -1229,8 +1498,11 @@ class SettingsDialog(QtWidgets.QDialog):
         container_layout.addWidget(self.local_widget)
         container_layout.addStretch()
         scroll.setWidget(container)
+        scroll.setMaximumWidth(520)
 
         preview_controls = QtWidgets.QHBoxLayout()
+        preview_controls.addWidget(self.preview_play_btn)
+        preview_controls.addWidget(self.preview_stop_btn)
         preview_controls.addWidget(self.prev_10_btn)
         preview_controls.addWidget(self.prev_1_btn)
         preview_controls.addWidget(self.next_1_btn)
@@ -1250,11 +1522,12 @@ class SettingsDialog(QtWidgets.QDialog):
         preview_layout.addLayout(preview_controls)
         preview_layout.addLayout(slider_layout)
 
-        splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
+        splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
         splitter.addWidget(preview_container)
         splitter.addWidget(scroll)
-        splitter.setStretchFactor(0, 2)
-        splitter.setStretchFactor(1, 3)
+        splitter.setStretchFactor(0, 4)
+        splitter.setStretchFactor(1, 2)
+        splitter.setSizes([1100, 400])
 
         content_layout = QtWidgets.QVBoxLayout()
         content_layout.addWidget(splitter, 1)
@@ -1281,16 +1554,30 @@ class SettingsDialog(QtWidgets.QDialog):
 
     def set_values(self, local_opts: LocalRenderOptions) -> None:
         self.local_widget.set_settings(local_opts)
+        self._clip_stale = True
+        self._rendered_clip_path = None
         self._schedule_preview_update()
 
     def set_video_files(self, video_files: List[pathlib.Path]) -> None:
         self.video_files = video_files
+        self._rendered_clip_path = None
+        self._clip_stale = True
         self._load_preview_context()
         self._schedule_preview_update()
 
     def get_settings(self) -> LocalRenderOptions:
         """Get current settings from the local widget."""
         return self.local_widget.get_settings()
+
+    def closeEvent(self, event: QtGui.QCloseEvent) -> None:
+        self._stop_playback()
+        if self._preview_thread.isRunning():
+            self._preview_thread.quit()
+            self._preview_thread.wait(2000)
+        if self._clip_thread.isRunning():
+            self._clip_thread.quit()
+            self._clip_thread.wait(2000)
+        super().closeEvent(event)
 
     def _load_preview_context(self) -> None:
         self._total_frames = 0
@@ -1370,6 +1657,8 @@ class SettingsDialog(QtWidgets.QDialog):
 
     def _schedule_preview_update(self) -> None:
         """Schedule preview update with debouncing (avoid excessive renders)."""
+        self._clip_stale = True
+        self._stop_playback()
         if self._preview_timer.isActive():
             self._preview_timer.stop()
         self._preview_timer.start(300)
@@ -1400,6 +1689,86 @@ class SettingsDialog(QtWidgets.QDialog):
         rend = self._numpy_to_pixmap(rendered_frame) if isinstance(rendered_frame, np.ndarray) else None
         self.preview_widget.set_frames(orig, rend, error=error_msg if error_msg else None)
         self.preview_status.setText(error_msg if error_msg else "Fertig")
+
+    def _on_play_clicked(self) -> None:
+        if not self.video_files:
+            self.preview_status.setText("Keine Videos ausgewählt")
+            return
+
+        if self._clip_stale or not self._rendered_clip_path:
+            self._request_clip_render(play_after=True)
+            return
+
+        self._start_playback()
+
+    def _request_clip_render(self, play_after: bool) -> None:
+        if not self.video_files:
+            return
+
+        self._stop_playback()
+        self._clip_request_id += 1
+        self._pending_play_after = play_after
+        start_time = self._current_frame / self._fps if self._fps else 0.0
+        max_start = 0.0
+        if self._total_frames and self._fps:
+            max_start = max(0.0, (self._total_frames / self._fps) - self._preview_duration_sec)
+        start_time = min(max_start, max(0.0, start_time))
+
+        self.preview_status.setText("Rendering 5s Clip...")
+        self.clip_request.emit(
+            self.video_files[0],
+            self.get_settings(),
+            start_time,
+            self._preview_duration_sec,
+            self._clip_request_id,
+        )
+
+    def _on_clip_ready(self, request_id: int, clip_path: object, error_msg: str = "") -> None:
+        if request_id != self._clip_request_id:
+            return
+        if error_msg:
+            self.preview_status.setText(error_msg)
+            return
+        if isinstance(clip_path, pathlib.Path):
+            self._rendered_clip_path = clip_path
+            self._clip_stale = False
+            if self._pending_play_after:
+                self._start_playback()
+        else:
+            self.preview_status.setText("Clip nicht verfügbar")
+
+    def _start_playback(self) -> None:
+        if not self.video_files or not self._rendered_clip_path:
+            return
+
+        start_time_ms = int((self._current_frame / self._fps) * 1000) if self._fps else 0
+        self._original_player.setMedia(QtMultimedia.QMediaContent(QtCore.QUrl.fromLocalFile(str(self.video_files[0]))))
+        self._rendered_player.setMedia(
+            QtMultimedia.QMediaContent(QtCore.QUrl.fromLocalFile(str(self._rendered_clip_path)))
+        )
+
+        self._original_player.setPosition(start_time_ms)
+        self._rendered_player.setPosition(0)
+
+        self.preview_widget.set_video_mode(True)
+        self._original_player.play()
+        self._rendered_player.play()
+        self._playback_timer.start(int(self._preview_duration_sec * 1000))
+        self.preview_status.setText("Playback läuft...")
+
+    def _stop_playback(self) -> None:
+        try:
+            self._playback_timer.stop()
+        except Exception:
+            pass
+        try:
+            self._original_player.stop()
+            self._rendered_player.stop()
+        except Exception:
+            pass
+        self.preview_widget.set_video_mode(False)
+        if self.video_files:
+            self.preview_status.setText("Fertig")
 
     @staticmethod
     def _numpy_to_pixmap(arr: np.ndarray) -> Optional[QtGui.QPixmap]:
